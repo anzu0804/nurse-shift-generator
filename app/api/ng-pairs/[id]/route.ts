@@ -122,12 +122,14 @@ export async function PUT(
   try {
     // 編集中のレコード自身は、重複チェックから除外する
     const { data: duplicate, error: checkError } = await supabase
-      .from("ng_pairs")
-      .select("id")
-      .eq("staff_a_id", staffAId)
-      .eq("staff_b_id", staffBId)
-      .neq("id", pairId)
-      .maybeSingle();
+  .from("ng_pairs")
+  .select("id")
+  .or(
+    `and(staff_a_id.eq.${staffAId},staff_b_id.eq.${staffBId}),and(staff_a_id.eq.${staffBId},staff_b_id.eq.${staffAId})`
+  )
+  .neq("id", pairId)
+  .limit(1)
+  .maybeSingle();
 
     if (checkError) {
       console.error("NGペア重複確認エラー:", checkError.code);
