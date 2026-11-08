@@ -170,6 +170,30 @@ export default function NewLeaveRequestPage() {
           </Select>
         </div>
 
+<div>
+  <label className="block">
+    <span className="mb-2 block font-medium">
+      状態
+    </span>
+
+    <Select
+      value={form.status}
+      onChange={(e) => {
+        const status = e.currentTarget.value;
+
+        setForm((prev) => ({
+          ...prev,
+          status,
+        }));
+      }}
+    >
+      <option value="申請済み">申請済み</option>
+      <option value="確定">確定</option>
+      <option value="取消">取消</option>
+    </Select>
+  </label>
+</div>
+
         <div>
           <label className="mb-2 block font-medium">
             備考

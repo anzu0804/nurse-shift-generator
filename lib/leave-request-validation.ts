@@ -155,11 +155,11 @@ export function getLeaveDbError(code: string): {
 } {
   switch (code) {
     case "23505":
-      return {
-        status: 409,
-        message:
-          "同じスタッフ・希望日・休暇種別は登録済みです。取消済みの場合も、既存の申請を編集してください。",
-      };
+  return {
+    status: 409,
+    message:
+      "このスタッフの同じ日付に、申請済みまたは確定の希望休があります。休暇種別にかかわらず1日1件までです。既存の申請を編集するか、取消にしてから登録してください。",
+  };
 
     case "23503":
       return {
