@@ -1,5 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
 import { supabase } from "@/lib/supabase";
+import {
+  parsePositiveId,
+  validateLeaveRequest,
+  getLeaveDbError,
+} from "@/lib/leave-request-validation";
 
 type RouteContext = {
   params: Promise<{
@@ -32,39 +37,76 @@ export async function GET(
 
 // 更新
 export async function PUT(
-  request: NextRequest,
+  request: Request,
   { params }: RouteContext
 ) {
   const { id } = await params;
-  const body = await request.json();
+  const requestId = parsePositiveId(id);
 
-  const { data, error } = await supabase
-    .from("leave_requests")
-    .update({
-      staff_id: body.staff_id,
-      leave_date: body.leave_date,
-      leave_type: body.leave_type,
-      status: body.status,
-      note: body.note,
-    })
-    .eq("id", id)
-    .select();
-
-  if (error) {
+  if (requestId === null) {
     return NextResponse.json(
-      { error: error.message },
+      { error: "希望休IDが正しくありません。" },
+      { status: 400 }
+    );
+  }
+
+  let body: unknown;
+
+  try {
+    body = await request.json();
+  } catch {
+    return NextResponse.json(
+      { error: "送信データの形式が正しくありません。" },
+      { status: 400 }
+    );
+  }
+
+  const result = validateLeaveRequest(body, "update");
+
+  if (!result.ok) {
+    return NextResponse.json(
+      { error: result.error },
+      { status: 400 }
+    );
+  }
+
+  try {
+    const { data, error } = await supabase
+      .from("leave_requests")
+      .update(result.data)
+      .eq("id", requestId)
+      .select()
+      .maybeSingle();
+
+    if (error) {
+      const resultError = getLeaveDbError(error.code);
+
+      return NextResponse.json(
+        { error: resultError.message },
+        { status: resultError.status }
+      );
+    }
+
+    if (!data) {
+      return NextResponse.json(
+        {
+          error:
+            "更新対象の希望休が見つからないか、更新権限がありません。",
+        },
+        { status: 404 }
+      );
+    }
+
+    return NextResponse.json(data);
+  } catch {
+    return NextResponse.json(
+      {
+        error:
+          "通信に失敗しました。一覧を再読み込みして、更新結果を確認してください。",
+      },
       { status: 500 }
     );
   }
-
-  if (!data || data.length === 0) {
-    return NextResponse.json(
-      { error: "対象データが見つかりません。" },
-      { status: 404 }
-    );
-  }
-
-  return NextResponse.json(data[0]);
 }
 
 // 削除

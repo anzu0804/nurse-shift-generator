@@ -1,5 +1,9 @@
 import { NextResponse } from "next/server";
 import { supabase } from "@/lib/supabase";
+import {
+  validateLeaveRequest,
+  getLeaveDbError,
+} from "@/lib/leave-request-validation";
 
 // 希望休一覧の取得
 // ?month=2026-11 のように指定すると、その月だけ取得する
@@ -121,28 +125,60 @@ export async function GET(request: Request) {
 
 // 新規登録：これまでの登録処理を残す
 export async function POST(request: Request) {
-  const body = await request.json();
+  let body: unknown;
 
-  const { data, error } = await supabase
-    .from("leave_requests")
-    .insert([
-      {
-        staff_id: body.staff_id,
-        leave_date: body.leave_date,
-        leave_type: body.leave_type,
-        status: body.status ?? "申請済み",
-        note: body.note || null,
-      },
-    ])
-    .select()
-    .single();
-
-  if (error) {
+  try {
+    body = await request.json();
+  } catch {
     return NextResponse.json(
-      { error: error.message },
-      { status: 500 }
+      { error: "送信データの形式が正しくありません。" },
+      { status: 400 }
     );
   }
 
-  return NextResponse.json(data, { status: 201 });
+  const result = validateLeaveRequest(body, "create");
+
+  if (!result.ok) {
+    return NextResponse.json(
+      { error: result.error },
+      { status: 400 }
+    );
+  }
+
+  try {
+    const { data, error } = await supabase
+      .from("leave_requests")
+      .insert(result.data)
+      .select()
+      .single();
+
+    if (error) {
+      const resultError = getLeaveDbError(error.code);
+
+      return NextResponse.json(
+        { error: resultError.message },
+        { status: resultError.status }
+      );
+    }
+
+    if (!data) {
+      return NextResponse.json(
+        {
+          error:
+            "登録結果を確認できませんでした。一覧を再読み込みしてください。",
+        },
+        { status: 500 }
+      );
+    }
+
+    return NextResponse.json(data, { status: 201 });
+  } catch {
+    return NextResponse.json(
+      {
+        error:
+          "通信に失敗しました。一覧を再読み込みして、登録の有無を確認してください。",
+      },
+      { status: 500 }
+    );
+  }
 }
