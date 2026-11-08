@@ -165,9 +165,40 @@ return (
         />
       </div>
 
-      <PrimaryButton onClick={handleUpdate}>
-        更新する
-      </PrimaryButton>
+      <div className="rounded-lg border border-slate-200 bg-slate-50 p-4">
+  <label className="flex items-center gap-3">
+    <input
+      type="checkbox"
+      checked={form.is_active}
+      onChange={(e) => {
+        const checked = e.currentTarget.checked;
+
+        setForm((prev) => ({
+          ...prev,
+          is_active: checked,
+        }));
+      }}
+      aria-describedby="ng-pair-active-help"
+      className="h-4 w-4"
+    />
+
+    <span className="font-medium">
+      このNGペアを有効にする
+    </span>
+  </label>
+
+  <p
+    id="ng-pair-active-help"
+    className="mt-2 text-sm text-slate-600"
+  >
+    チェックを外して更新すると、無効になります。
+    データは削除されず、後から再び有効にできます。
+  </p>
+</div>
+
+<PrimaryButton onClick={handleUpdate}>
+  更新する
+</PrimaryButton>
 
     </div>
   </div>
