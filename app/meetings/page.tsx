@@ -1,9 +1,22 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import {
+  useEffect,
+  useRef,
+  useState,
+  useSyncExternalStore,
+} from "react";
 import Link from "next/link";
 import PageHeader from "@/components/common/PageHeader";
 import PrimaryButton from "@/components/ui/PrimaryButton";
+import { supabase } from "@/lib/supabase";
+import ScheduleCalendar, {
+  getToday,
+  subscribeClock,
+  serverToday,
+  daysInMonth,
+  expandDates,
+} from "@/components/common/ScheduleCalendar";
 
 type Meeting = {
   id: number;
@@ -34,18 +47,225 @@ export default function MeetingsPage() {
   const [meetings, setMeetings] = useState<Meeting[]>([]);
   const [events, setEvents] = useState<Event[]>([]);
 
-  const fetchMeetings = async () => {
-    const response = await fetch("/api/meetings");
-    const data = await response.json();
+  const today = useSyncExternalStore(
+  subscribeClock,
+  getToday,
+  serverToday
+);
 
-    if (!response.ok) {
-      alert(data.error ?? "会議一覧の取得に失敗しました");
+const [chosenMonth, setChosenMonth] = useState("");
+const [selectedDate, setSelectedDate] = useState("");
+
+const scheduleListRef = useRef<HTMLDivElement>(null);
+
+const calendarMonth = chosenMonth || today.slice(0, 7);
+
+const calendarDays = calendarMonth
+  ? daysInMonth(calendarMonth)
+  : [];
+
+  // 検索・フィルターの選択内容
+const [searchText, setSearchText] = useState("");
+const [timePeriodFilter, setTimePeriodFilter] = useState("");
+const [recurrenceFilter, setRecurrenceFilter] = useState("");
+const [meetingStatusFilter, setMeetingStatusFilter] = useState("");
+const [eventTypeFilter, setEventTypeFilter] = useState("");
+
+// 全角・半角や英字の大文字・小文字をそろえて検索する
+const normalizeSearch = (text: string) =>
+  text.normalize("NFKC").toLocaleLowerCase("ja").trim();
+
+const searchWords = normalizeSearch(searchText)
+  .split(/\s+/)
+  .filter(Boolean);
+
+const matchesSearch = (
+  values: Array<string | null | undefined>
+) => {
+  const text = normalizeSearch(
+    values.map((value) => value ?? "").join(" ")
+  );
+
+  return searchWords.every((word) => text.includes(word));
+};
+
+// 会議：名前・繰り返し条件・時間帯・有効／無効で絞り込む
+const filteredMeetings = meetings.filter((meeting) => {
+  return (
+    matchesSearch([
+      meeting.meeting_name,
+      meeting.recurrence_rule,
+    ]) &&
+    (!timePeriodFilter ||
+      meeting.time_period === timePeriodFilter) &&
+    (!recurrenceFilter ||
+      (meeting.recurrence_type?.trim() || "なし") ===
+        recurrenceFilter) &&
+    (!meetingStatusFilter ||
+      meeting.is_active === (meetingStatusFilter === "true"))
+  );
+});
+
+// 予定：名前・種別・繰り返し条件・備考などで絞り込む
+const filteredEvents = events.filter((event) => {
+  return (
+    matchesSearch([
+      event.event_name,
+      event.event_type,
+      event.recurrence_rule,
+      event.note,
+    ]) &&
+    (!timePeriodFilter ||
+      event.time_period === timePeriodFilter) &&
+    (!recurrenceFilter ||
+      (event.recurrence_type?.trim() || "なし") ===
+        recurrenceFilter) &&
+    (!eventTypeFilter ||
+      event.event_type === eventTypeFilter)
+  );
+});
+
+// 登録済みのイベント種別を、フィルターの選択肢にする
+const eventTypeOptions = Array.from(
+  new Set(
+    events
+      .map((event) => event.event_type)
+      .filter(
+        (value): value is string =>
+          typeof value === "string" && value !== ""
+      )
+  )
+).sort((a, b) => a.localeCompare(b, "ja"));
+
+// 検索・フィルター適用後の会議をカレンダー形式に変換
+const meetingCalendarItems = filteredMeetings.map((meeting) => ({
+  id: meeting.id,
+  title: meeting.meeting_name,
+  date: meeting.meeting_date,
+  time_period: meeting.time_period,
+  recurrence_type: meeting.recurrence_type,
+  recurrence_rule: meeting.recurrence_rule,
+  is_active: meeting.is_active,
+  href: `/meetings/${meeting.id}`,
+  source: meeting,
+}));
+
+// 検索・フィルター適用後の予定をカレンダー形式に変換
+const eventCalendarItems = filteredEvents.map((event) => ({
+  id: event.id,
+  title: event.event_name,
+  date: event.event_date,
+  time_period: event.time_period,
+  recurrence_type: event.recurrence_type,
+  recurrence_rule: event.recurrence_rule,
+  href: `/events/${event.id}`,
+  source: event,
+}));
+
+// 表示月の開催日ごとに、会議の一覧行を作る
+const visibleMeetings = meetingCalendarItems
+  .flatMap((item) => {
+    const { dates } = expandDates(
+      item,
+      calendarMonth,
+      calendarDays
+    );
+
+    return dates
+      .filter((date) => !selectedDate || date === selectedDate)
+      .map((date) => ({
+        ...item.source,
+        occurrence_date: date,
+      }));
+  })
+  .sort(
+    (a, b) =>
+      a.occurrence_date.localeCompare(b.occurrence_date) ||
+      a.id - b.id
+  );
+
+// 表示月の開催日ごとに、予定の一覧行を作る
+const visibleEvents = eventCalendarItems
+  .flatMap((item) => {
+    const { dates } = expandDates(
+      item,
+      calendarMonth,
+      calendarDays
+    );
+
+    return dates
+      .filter((date) => !selectedDate || date === selectedDate)
+      .map((date) => ({
+        ...item.source,
+        occurrence_date: date,
+      }));
+  })
+  .sort(
+    (a, b) =>
+      a.occurrence_date.localeCompare(b.occurrence_date) ||
+      a.id - b.id
+  );
+
+  const fetchMeetings = async () => {
+  try {
+    // ブラウザでログインしたセッションからトークンを取り出す
+    const { data: sessionData, error: sessionError } =
+      await supabase.auth.getSession();
+
+    if (sessionError) {
+      throw new Error(
+        "ログイン状態を確認できません。ログイン画面を開き直してください。"
+      );
+    }
+
+    const token = sessionData.session?.access_token;
+
+    if (!token) {
       setMeetings([]);
+      window.location.assign("/login");
       return;
     }
 
-    setMeetings(Array.isArray(data) ? data : []);
-  };
+    // 自分のアプリのAPIへ、ログイン情報を添えて送る
+    const response = await fetch("/api/meetings", {
+      headers: {
+        Authorization: `Bearer ${token}`,
+      },
+      cache: "no-store",
+      redirect: "error",
+    });
+
+    if (response.status === 401) {
+      setMeetings([]);
+      window.location.assign("/login");
+      return;
+    }
+
+    const data = await response.json();
+
+    if (!response.ok) {
+      throw new Error(
+        typeof data?.error === "string"
+          ? data.error
+          : "会議一覧の取得に失敗しました。"
+      );
+    }
+
+    if (!Array.isArray(data)) {
+      throw new Error("会議一覧のデータ形式を確認できません。");
+    }
+
+    setMeetings(data);
+  } catch (error) {
+    setMeetings([]);
+
+    alert(
+      error instanceof Error
+        ? error.message
+        : "会議一覧の取得に失敗しました。"
+    );
+  }
+};
 
   const fetchEvents = async () => {
     const response = await fetch("/api/events");
@@ -159,6 +379,187 @@ export default function MeetingsPage() {
         </button>
       </div>
 
+<ScheduleCalendar
+  label={activeTab === "meetings" ? "会議" : "予定"}
+  items={
+    activeTab === "meetings"
+      ? meetingCalendarItems
+      : eventCalendarItems
+  }
+  month={calendarMonth}
+  today={today}
+  selectedDate={selectedDate}
+  onMonthChange={(value) => {
+    setChosenMonth(value);
+    setSelectedDate("");
+  }}
+  onSelectDate={(date) => {
+    setSelectedDate(date);
+
+    scheduleListRef.current?.scrollIntoView({
+      behavior: "smooth",
+      block: "start",
+    });
+  }}
+/>
+
+<div
+  ref={scheduleListRef}
+  className="mb-4 flex scroll-mt-4 flex-wrap items-center justify-between gap-3"
+>
+  <div>
+    <h2 className="text-xl font-bold text-slate-900">
+      {selectedDate
+        ? `${selectedDate.replaceAll("-", "/")}の一覧`
+        : calendarMonth
+          ? `${Number(calendarMonth.slice(0, 4))}年${Number(
+              calendarMonth.slice(5, 7)
+            )}月の一覧`
+          : "一覧"}
+    </h2>
+
+    <p className="mt-1 text-sm text-slate-600">
+      繰り返し予定は開催日ごとに表示します。
+      編集・削除は、その日だけではなく登録全体に適用されます。
+    </p>
+  </div>
+
+  {selectedDate && (
+    <button
+      type="button"
+      onClick={() => setSelectedDate("")}
+      className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm hover:bg-slate-50"
+    >
+      日付の選択を解除
+    </button>
+  )}
+</div>
+
+<div className="mb-4 space-y-4 rounded-xl border border-slate-200 bg-white p-4">
+  <label className="block">
+    <span className="mb-1 block text-sm font-medium">
+      検索
+    </span>
+
+    <input
+      type="search"
+      value={searchText}
+      onChange={(e) => setSearchText(e.target.value)}
+      placeholder={
+        activeTab === "meetings"
+          ? "会議名・繰り返し条件で検索"
+          : "予定名・種別・繰り返し条件・備考で検索"
+      }
+      className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
+    />
+  </label>
+
+  <div className="grid gap-3 sm:grid-cols-3">
+    <label className="block">
+      <span className="mb-1 block text-sm font-medium">
+        時間帯
+      </span>
+
+      <select
+        value={timePeriodFilter}
+        onChange={(e) => setTimePeriodFilter(e.target.value)}
+        className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2"
+      >
+        <option value="">すべて</option>
+        <option value="AM">AM</option>
+        <option value="PM">PM</option>
+        <option value="終日">終日</option>
+      </select>
+    </label>
+
+    <label className="block">
+      <span className="mb-1 block text-sm font-medium">
+        繰り返し
+      </span>
+
+      <select
+        value={recurrenceFilter}
+        onChange={(e) => setRecurrenceFilter(e.target.value)}
+        className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2"
+      >
+        <option value="">すべて</option>
+        <option value="なし">なし</option>
+        <option value="毎週">毎週</option>
+        <option value="毎月">毎月</option>
+      </select>
+    </label>
+
+    {activeTab === "meetings" ? (
+      <label className="block">
+        <span className="mb-1 block text-sm font-medium">
+          会議の状態
+        </span>
+
+        <select
+          value={meetingStatusFilter}
+          onChange={(e) =>
+            setMeetingStatusFilter(e.target.value)
+          }
+          className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2"
+        >
+          <option value="">すべて</option>
+          <option value="true">有効</option>
+          <option value="false">無効</option>
+        </select>
+      </label>
+    ) : (
+      <label className="block">
+        <span className="mb-1 block text-sm font-medium">
+          イベント種別
+        </span>
+
+        <select
+          value={eventTypeFilter}
+          onChange={(e) => setEventTypeFilter(e.target.value)}
+          className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2"
+        >
+          <option value="">すべて</option>
+
+          {eventTypeOptions.map((type) => (
+            <option key={type} value={type}>
+              {type}
+            </option>
+          ))}
+        </select>
+      </label>
+    )}
+  </div>
+
+  <div className="flex flex-wrap items-center justify-between gap-3">
+    <button
+      type="button"
+      onClick={() => {
+        setSearchText("");
+        setTimePeriodFilter("");
+        setRecurrenceFilter("");
+        setMeetingStatusFilter("");
+        setEventTypeFilter("");
+      }}
+      className="text-sm font-medium text-blue-600 hover:underline"
+    >
+      検索・フィルターをクリア
+    </button>
+
+   <p className="text-sm text-slate-600">
+  一覧：
+  <span className="font-semibold text-slate-900">
+    {activeTab === "meetings"
+      ? visibleMeetings.length
+      : visibleEvents.length}
+  </span>
+  件
+  {selectedDate
+    ? "（選択日の開催件数）"
+    : "（表示月の開催件数）"}
+</p>
+  </div>
+</div>
+
       {activeTab === "meetings" && (
         <div className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
           <table className="w-full">
@@ -174,9 +575,9 @@ export default function MeetingsPage() {
             </thead>
 
             <tbody>
-              {meetings.map((meeting) => (
+              {visibleMeetings.map((meeting) => (
                 <tr
-                  key={meeting.id}
+                  key={`${meeting.id}:${meeting.occurrence_date}`}
                   className="border-t border-slate-200"
                 >
                   <td className="p-4">
@@ -184,7 +585,7 @@ export default function MeetingsPage() {
                   </td>
 
                   <td className="p-4">
-                    {meeting.meeting_date || "－"}
+                   {meeting.occurrence_date.replaceAll("-", "/")}
                   </td>
 
                   <td className="p-4">
@@ -222,13 +623,13 @@ export default function MeetingsPage() {
                 </tr>
               ))}
 
-              {meetings.length === 0 && (
+             {visibleMeetings.length === 0 && (
                 <tr>
                   <td
                     colSpan={6}
                     className="p-8 text-center text-slate-500"
                   >
-                    会議はまだ登録されていません。
+                    条件に一致する会議はありません。
                   </td>
                 </tr>
               )}
@@ -253,9 +654,9 @@ export default function MeetingsPage() {
             </thead>
 
             <tbody>
-              {events.map((event) => (
+             {visibleEvents.map((event) => (
                 <tr
-                  key={event.id}
+                  key={`${event.id}:${event.occurrence_date}`}
                   className="border-t border-slate-200"
                 >
                   <td className="p-4">
@@ -263,7 +664,7 @@ export default function MeetingsPage() {
                   </td>
 
                   <td className="p-4">
-                    {event.event_date || "－"}
+                   {event.occurrence_date.replaceAll("-", "/")}
                   </td>
 
                   <td className="p-4">
@@ -305,13 +706,13 @@ export default function MeetingsPage() {
                 </tr>
               ))}
 
-              {events.length === 0 && (
+             {visibleEvents.length === 0 && (
                 <tr>
                   <td
                     colSpan={7}
                     className="p-8 text-center text-slate-500"
                   >
-                    予定はまだ登録されていません。
+                    条件に一致する予定はありません。
                   </td>
                 </tr>
               )}

@@ -2,10 +2,10 @@
 
 import { useRouter } from "next/navigation";
 import PageHeader from "@/components/common/PageHeader";
-import PrimaryButton from "@/components/ui/PrimaryButton";
 import Input from "@/components/ui/Input";
 import Select from "@/components/ui/Select";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import { supabase } from "@/lib/supabase";
 
 type MeetingForm = {
   meeting_name: string;
@@ -28,6 +28,8 @@ export default function NewMeetingPage() {
 
   const [staffs, setStaffs] = useState<Staff[]>([]);
 const [selectedStaffIds, setSelectedStaffIds] = useState<number[]>([]);
+const [saving, setSaving] = useState(false);
+const savingRef = useRef(false);
 
 useEffect(() => {
   const fetchStaffs = async () => {
@@ -55,41 +57,108 @@ useEffect(() => {
   });
 
   const handleCreate = async () => {
+  if (savingRef.current) {
+    return;
+  }
+
+  if (!form.meeting_name.trim()) {
+    alert("会議名を入力してください。");
+    return;
+  }
+
+  if (
+    form.recurrence_type === "なし" &&
+    !form.meeting_date
+  ) {
+    alert("開催日を入力してください。");
+    return;
+  }
+
+  savingRef.current = true;
+  setSaving(true);
+
+  let registered = false;
+
+  try {
+    // ブラウザのログイン情報を取り出す
+    const { data: sessionData, error: sessionError } =
+      await supabase.auth.getSession();
+
+    if (sessionError) {
+      alert("ログイン状態を確認できません。ログインし直してください。");
+      return;
+    }
+
+    const token = sessionData.session?.access_token;
+
+    if (!token) {
+      alert("ログインが必要です。");
+      router.push("/login");
+      return;
+    }
+
+    // 会議情報と担当スタッフを、1回のリクエストで送る
     const response = await fetch("/api/meetings", {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
+        Authorization: `Bearer ${token}`,
       },
-      body: JSON.stringify(form),
+      redirect: "error",
+      body: JSON.stringify({
+        ...form,
+        staff_ids: selectedStaffIds,
+      }),
     });
+
+    if (response.status === 401) {
+      alert("ログインの有効期限を確認できません。ログインし直してください。");
+      router.push("/login");
+      return;
+    }
 
     const data = await response.json();
 
     if (!response.ok) {
-      alert(data.error ?? "登録に失敗しました");
+      alert(
+        typeof data?.error === "string"
+          ? data.error
+          : "登録結果を確認できません。再登録前に一覧を確認してください。"
+      );
       return;
     }
 
-    await Promise.all(
-  selectedStaffIds.map((staffId) =>
-    fetch("/api/meeting-staffs", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        meeting_id: data.id,
-        staff_id: staffId,
-      }),
-    })
-  )
-);
+    if (
+      !data ||
+      !Number.isSafeInteger(data.id) ||
+      !Array.isArray(data.staff_ids)
+    ) {
+      alert(
+        "登録結果を確認できません。もう一度登録せず、先に会議一覧を確認してください。"
+      );
+      return;
+    }
 
-    alert("会議を登録しました");
+    registered = true;
+
+    alert(
+      `会議と担当スタッフ${data.staff_ids.length}人を登録しました。`
+    );
 
     router.push("/meetings");
     router.refresh();
-  };
+  } catch {
+    alert(
+      "通信に失敗しました。登録済みの可能性があるため、再登録する前に会議一覧を確認してください。"
+    );
+  } finally {
+    // 成功時は画面移動までボタンを無効にしておく
+    if (!registered) {
+      savingRef.current = false;
+      setSaving(false);
+    }
+  }
+};
 
   return (
     <div className="max-w-3xl">
@@ -245,9 +314,14 @@ useEffect(() => {
   </div>
 </div>
 
-        <PrimaryButton onClick={handleCreate}>
-          登録する
-        </PrimaryButton>
+       <button
+  type="button"
+  onClick={() => void handleCreate()}
+  disabled={saving}
+  className="rounded-lg bg-blue-600 px-6 py-3 font-medium text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
+>
+  {saving ? "登録中…" : "登録する"}
+</button>
 
 
       </div>
