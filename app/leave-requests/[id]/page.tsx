@@ -1,11 +1,13 @@
 "use client";
 
+
 import { useEffect, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import PageHeader from "@/components/common/PageHeader";
 import PrimaryButton from "@/components/ui/PrimaryButton";
 import Input from "@/components/ui/Input";
 import Select from "@/components/ui/Select";
+import { supabase } from "@/lib/supabase";
 
 type LeaveRequestForm = {
   staff_id: string;
@@ -38,24 +40,73 @@ export default function EditLeaveRequestPage() {
   });
 
   useEffect(() => {
-    const fetchData = async () => {
-      const requestResponse = await fetch(`/api/leave-requests/${id}`);
-      const requestData = await requestResponse.json();
+  const fetchData = async () => {
+    try {
+      const { data: sessionData, error: sessionError } =
+        await supabase.auth.getSession();
+
+      if (sessionError) {
+        alert("ログイン状態を確認できません。");
+        return;
+      }
+
+      const token = sessionData.session?.access_token;
+
+      if (!token) {
+        alert("ログインが必要です。");
+        router.push("/login");
+        return;
+      }
+
+      const [requestResponse, staffResponse] =
+        await Promise.all([
+          fetch(`/api/leave-requests/${id}`, {
+            headers: {
+              Authorization: `Bearer ${token}`,
+            },
+            cache: "no-store",
+          }),
+          fetch("/api/staffs", {
+            headers: {
+              Authorization: `Bearer ${token}`,
+            },
+            cache: "no-store",
+          }),
+        ]);
+
+      if (
+        requestResponse.status === 401 ||
+        staffResponse.status === 401
+      ) {
+        router.push("/login");
+        return;
+      }
+
+      const [requestData, staffData] =
+        await Promise.all([
+          requestResponse.json(),
+          staffResponse.json(),
+        ]);
 
       if (!requestResponse.ok) {
-        alert(requestData.error ?? "希望休の取得に失敗しました");
+        alert(
+          requestData.error ??
+            "希望休の取得に失敗しました"
+        );
         return;
       }
-
-      const staffResponse = await fetch("/api/staffs");
-      const staffData = await staffResponse.json();
 
       if (!staffResponse.ok) {
-        alert(staffData.error ?? "スタッフ一覧の取得に失敗しました");
+        alert(
+          staffData.error ??
+            "スタッフ一覧の取得に失敗しました"
+        );
         return;
       }
 
-      setStaffs(Array.isArray(staffData) ? staffData : []);
+      setStaffs(
+        Array.isArray(staffData) ? staffData : []
+      );
 
       setForm({
         staff_id: String(requestData.staff_id),
@@ -64,29 +115,61 @@ export default function EditLeaveRequestPage() {
         status: requestData.status ?? "申請済み",
         note: requestData.note ?? "",
       });
-
+    } catch {
+      alert("通信に失敗しました。");
+    } finally {
       setLoading(false);
-    };
+    }
+  };
 
-    fetchData();
-  }, [id]);
+  if (id) {
+    void fetchData();
+  }
+}, [id, router]);
 
   const handleUpdate = async () => {
-    const response = await fetch(`/api/leave-requests/${id}`, {
-      method: "PUT",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        staff_id: Number(form.staff_id),
-        leave_date: form.leave_date,
-        leave_type: form.leave_type,
-        status: form.status,
-        note: form.note,
-      }),
-    });
+  try {
+    const { data: sessionData, error: sessionError } =
+      await supabase.auth.getSession();
+
+    if (sessionError) {
+      alert("ログイン状態を確認できません。");
+      return;
+    }
+
+    const token = sessionData.session?.access_token;
+
+    if (!token) {
+      alert("ログインが必要です。");
+      router.push("/login");
+      return;
+    }
+
+    const response = await fetch(
+      `/api/leave-requests/${id}`,
+      {
+        method: "PUT",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({
+          staff_id: Number(form.staff_id),
+          leave_date: form.leave_date,
+          leave_type: form.leave_type,
+          status: form.status,
+          note: form.note,
+        }),
+      }
+    );
 
     const data = await response.json();
+
+    if (response.status === 401) {
+      alert("ログインし直してください。");
+      router.push("/login");
+      return;
+    }
 
     if (!response.ok) {
       alert(data.error ?? "更新に失敗しました");
@@ -94,9 +177,15 @@ export default function EditLeaveRequestPage() {
     }
 
     alert("希望休を更新しました！");
+
     router.push("/leave-requests");
     router.refresh();
-  };
+  } catch {
+    alert(
+      "通信に失敗しました。更新済みの可能性があるため、一覧を確認してください。"
+    );
+  }
+};
 
   if (loading) {
     return <p>読み込み中...</p>;

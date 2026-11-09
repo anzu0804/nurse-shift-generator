@@ -6,6 +6,7 @@ import PageHeader from "@/components/common/PageHeader";
 import PrimaryButton from "@/components/ui/PrimaryButton";
 import Input from "@/components/ui/Input";
 import Select from "@/components/ui/Select";
+import { supabase } from "@/lib/supabase";
 
 
 type StaffForm = {
@@ -48,7 +49,27 @@ export default function StaffEditPage() {
   useEffect(() => {
     const fetchStaff = async () => {
       try {
-        const response = await fetch(`/api/staffs/${id}`);
+        const { data: sessionData, error: sessionError } =
+  await supabase.auth.getSession();
+
+if (sessionError) {
+  alert("ログイン状態を確認できません。");
+  return;
+}
+
+const token = sessionData.session?.access_token;
+
+if (!token) {
+  router.push("/login");
+  return;
+}
+
+const response = await fetch(`/api/staffs/${id}`, {
+  headers: {
+    Authorization: `Bearer ${token}`,
+  },
+  cache: "no-store",
+});
 
         if (!response.ok) {
           const errorData = await response.json();
@@ -86,13 +107,30 @@ export default function StaffEditPage() {
   }, [id]);
 
 const handleUpdate = async () => {
-  const response = await fetch(`/api/staffs/${id}`, {
-    method: "PUT",
-    headers: {
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify(form),
-  });
+  const { data: sessionData, error: sessionError } =
+  await supabase.auth.getSession();
+
+if (sessionError) {
+  alert("ログイン状態を確認できません。");
+  return;
+}
+
+const token = sessionData.session?.access_token;
+
+if (!token) {
+  alert("ログインが必要です。");
+  router.push("/login");
+  return;
+}
+
+const response = await fetch(`/api/staffs/${id}`, {
+  method: "PUT",
+  headers: {
+    "Content-Type": "application/json",
+    Authorization: `Bearer ${token}`,
+  },
+  body: JSON.stringify(form),
+});
 
   if (!response.ok) {
     const errorData = await response.json();

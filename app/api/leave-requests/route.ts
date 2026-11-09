@@ -1,52 +1,73 @@
 import { NextResponse } from "next/server";
-import { supabase } from "@/lib/supabase";
+import {
+  AuthError,
+  getAuthenticatedSupabase,
+} from "@/lib/authenticated-supabase";
 import {
   validateLeaveRequest,
   getLeaveDbError,
 } from "@/lib/leave-request-validation";
 
+function reply(body: unknown, status = 200) {
+  return NextResponse.json(body, {
+    status,
+    headers: {
+      "Cache-Control": "private, no-store",
+      Vary: "Authorization",
+    },
+  });
+}
+
 // 希望休一覧の取得
 // ?month=2026-11 のように指定すると、その月だけ取得する
 export async function GET(request: Request) {
-  const { searchParams } = new URL(request.url);
-  const month = searchParams.get("month");
-
-  let startDate: string | null = null;
-  let endDate: string | null = null;
-
-  if (month !== null) {
-    if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(month)) {
-      return NextResponse.json(
-        {
-          error: "表示月をYYYY-MM形式で指定してください。",
-        },
-        { status: 400 }
-      );
-    }
-
-    const [year, monthNumber] = month.split("-").map(Number);
-
-    if (year < 100 || year > 9998) {
-      return NextResponse.json(
-        {
-          error: "表示年は0100～9998の範囲で指定してください。",
-        },
-        { status: 400 }
-      );
-    }
-
-    const nextYear = monthNumber === 12 ? year + 1 : year;
-    const nextMonth = monthNumber === 12 ? 1 : monthNumber + 1;
-
-    startDate = `${month}-01`;
-
-    endDate =
-      `${String(nextYear).padStart(4, "0")}-` +
-      `${String(nextMonth).padStart(2, "0")}-01`;
-  }
-
   try {
-    // 件数が多い場合は、複数回に分けて取得する
+    const supabase =
+      await getAuthenticatedSupabase(request);
+
+    const { searchParams } = new URL(request.url);
+    const month = searchParams.get("month");
+
+    let startDate: string | null = null;
+    let endDate: string | null = null;
+
+    if (month !== null) {
+      if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(month)) {
+        return reply(
+          {
+            error:
+              "表示月をYYYY-MM形式で指定してください。",
+          },
+          400
+        );
+      }
+
+      const [year, monthNumber] =
+        month.split("-").map(Number);
+
+      if (year < 100 || year > 9998) {
+        return reply(
+          {
+            error:
+              "表示年は0100～9998の範囲で指定してください。",
+          },
+          400
+        );
+      }
+
+      const nextYear =
+        monthNumber === 12 ? year + 1 : year;
+
+      const nextMonth =
+        monthNumber === 12 ? 1 : monthNumber + 1;
+
+      startDate = `${month}-01`;
+
+      endDate =
+        `${String(nextYear).padStart(4, "0")}-` +
+        `${String(nextMonth).padStart(2, "0")}-01`;
+    }
+
     const rows: Record<string, unknown>[] = [];
     const pageSize = 500;
     let offset = 0;
@@ -69,23 +90,35 @@ export async function GET(request: Request) {
         .abortSignal(request.signal);
 
       if (error) {
-        console.error("希望休一覧取得エラー:", error.code);
+        if (error.code === "42501") {
+          return reply(
+            {
+              error:
+                "希望休を閲覧する権限がありません。",
+            },
+            403
+          );
+        }
 
-        return NextResponse.json(
+        return reply(
           {
             error:
-              "希望休一覧を取得できませんでした。接続状態と閲覧権限を確認してください。",
+              "希望休一覧を取得できませんでした。",
           },
-          { status: 500 }
+          500
         );
       }
 
-      if (!Array.isArray(data) || typeof count !== "number") {
-        return NextResponse.json(
+      if (
+        !Array.isArray(data) ||
+        typeof count !== "number"
+      ) {
+        return reply(
           {
-            error: "希望休一覧の取得結果を確認できませんでした。",
+            error:
+              "希望休一覧の取得結果を確認できませんでした。",
           },
-          { status: 500 }
+          500
         );
       }
 
@@ -97,55 +130,65 @@ export async function GET(request: Request) {
       }
 
       if (data.length === 0) {
-        return NextResponse.json(
+        return reply(
           {
             error:
               "希望休の取得中にデータが変更された可能性があります。再読み込みしてください。",
           },
-          { status: 503 }
+          503
         );
       }
     }
 
-    return NextResponse.json(rows, {
-      headers: {
-        "Cache-Control": "no-store",
-      },
-    });
-  } catch {
-    return NextResponse.json(
+    return reply(rows);
+  } catch (error) {
+    if (error instanceof AuthError) {
+      return reply(
+        { error: error.message },
+        error.status
+      );
+    }
+
+    return reply(
       {
         error:
-          "希望休一覧の通信に失敗しました。接続状態を確認してください。",
+          "希望休一覧の通信に失敗しました。",
       },
-      { status: 500 }
+      503
     );
   }
 }
 
-// 新規登録：これまでの登録処理を残す
+// 新規登録
 export async function POST(request: Request) {
-  let body: unknown;
-
   try {
-    body = await request.json();
-  } catch {
-    return NextResponse.json(
-      { error: "送信データの形式が正しくありません。" },
-      { status: 400 }
-    );
-  }
+    const supabase =
+      await getAuthenticatedSupabase(request);
 
-  const result = validateLeaveRequest(body, "create");
+    let body: unknown;
 
-  if (!result.ok) {
-    return NextResponse.json(
-      { error: result.error },
-      { status: 400 }
-    );
-  }
+    try {
+      body = await request.json();
+    } catch {
+      return reply(
+        {
+          error:
+            "送信データの形式が正しくありません。",
+        },
+        400
+      );
+    }
 
-  try {
+    const result =
+      validateLeaveRequest(body, "create");
+
+    if (!result.ok) {
+      return reply(
+        { error: result.error },
+        400
+      );
+    }
+
     const { data, error } = await supabase
       .from("leave_requests")
       .insert(result.data)
@@ -153,32 +196,50 @@ export async function POST(request: Request) {
       .single();
 
     if (error) {
-      const resultError = getLeaveDbError(error.code);
+      if (error.code === "42501") {
+        return reply(
+          {
+            error:
+              "希望休を登録する権限がありません。",
+          },
+          403
+        );
+      }
 
-      return NextResponse.json(
+      const resultError =
+        getLeaveDbError(error.code);
+
+      return reply(
         { error: resultError.message },
-        { status: resultError.status }
+        resultError.status
       );
     }
 
     if (!data) {
-      return NextResponse.json(
+      return reply(
         {
           error:
             "登録結果を確認できませんでした。一覧を再読み込みしてください。",
         },
-        { status: 500 }
+        500
       );
     }
 
-    return NextResponse.json(data, { status: 201 });
-  } catch {
-    return NextResponse.json(
+    return reply(data, 201);
+  } catch (error) {
+    if (error instanceof AuthError) {
+      return reply(
+        { error: error.message },
+        error.status
+      );
+    }
+
+    return reply(
       {
         error:
           "通信に失敗しました。一覧を再読み込みして、登録の有無を確認してください。",
       },
-      { status: 500 }
+      503
     );
   }
 }

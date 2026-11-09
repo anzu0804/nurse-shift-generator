@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 import PageHeader from "@/components/common/PageHeader";
 import PrimaryButton from "@/components/ui/PrimaryButton";
+import { supabase } from "@/lib/supabase";
 
 type NgPair = {
   id: number;
@@ -57,30 +58,100 @@ const statusTabs = [
 ] as const;
 
   const fetchPairs = async () => {
-    const response = await fetch("/api/ng-pairs");
+  try {
+    const { data: sessionData, error: sessionError } =
+      await supabase.auth.getSession();
+
+    if (sessionError) {
+      throw new Error("ログイン状態を確認できません。");
+    }
+
+    const token = sessionData.session?.access_token;
+
+    if (!token) {
+      window.location.assign("/login");
+      return;
+    }
+
+    const response = await fetch("/api/ng-pairs", {
+      headers: {
+        Authorization: `Bearer ${token}`,
+      },
+      cache: "no-store",
+    });
+
     const data = await response.json();
 
-    if (!response.ok) {
-      alert(data.error ?? "NGペア一覧の取得に失敗しました");
-      setPairs([]);
+    if (response.status === 401) {
+      window.location.assign("/login");
       return;
+    }
+
+    if (!response.ok) {
+      throw new Error(
+        data.error ?? "NGペア一覧の取得に失敗しました。"
+      );
     }
 
     setPairs(Array.isArray(data) ? data : []);
-  };
+  } catch (error) {
+    setPairs([]);
 
-  const fetchStaffs = async () => {
-    const response = await fetch("/api/staffs");
-    const data = await response.json();
+    alert(
+      error instanceof Error
+        ? error.message
+        : "NGペア一覧の取得に失敗しました。"
+    );
+  }
+};
 
-    if (!response.ok) {
-      alert(data.error ?? "スタッフ一覧の取得に失敗しました");
-      setStaffs([]);
+const fetchStaffs = async () => {
+  try {
+    const { data: sessionData, error: sessionError } =
+      await supabase.auth.getSession();
+
+    if (sessionError) {
+      throw new Error("ログイン状態を確認できません。");
+    }
+
+    const token = sessionData.session?.access_token;
+
+    if (!token) {
+      window.location.assign("/login");
       return;
     }
 
+    const response = await fetch("/api/staffs", {
+      headers: {
+        Authorization: `Bearer ${token}`,
+      },
+      cache: "no-store",
+    });
+
+    const data = await response.json();
+
+    if (response.status === 401) {
+      window.location.assign("/login");
+      return;
+    }
+
+    if (!response.ok) {
+      throw new Error(
+        data.error ?? "スタッフ一覧の取得に失敗しました。"
+      );
+    }
+
     setStaffs(Array.isArray(data) ? data : []);
-  };
+  } catch (error) {
+    setStaffs([]);
+
+    alert(
+      error instanceof Error
+        ? error.message
+        : "スタッフ一覧の取得に失敗しました。"
+    );
+  }
+};
 
   useEffect(() => {
     fetchPairs();
@@ -97,7 +168,7 @@ const statusTabs = [
     return `${staff.employee_no} ${staff.name}`;
   };
 
-  const handleDelete = async (
+const handleDelete = async (
   id: number,
   reason: string
 ) => {
@@ -109,22 +180,58 @@ const statusTabs = [
     return;
   }
 
-  const response = await fetch(`/api/ng-pairs/${id}`, {
-    method: "DELETE",
-  });
+  try {
+    const { data: sessionData, error: sessionError } =
+      await supabase.auth.getSession();
 
-  const data = await response.json();
+    if (sessionError) {
+      throw new Error("ログイン状態を確認できません。");
+    }
 
-  if (!response.ok) {
-    alert(data.error ?? "削除に失敗しました");
-    return;
+    const token = sessionData.session?.access_token;
+
+    if (!token) {
+      window.location.assign("/login");
+      return;
+    }
+
+    const response = await fetch(`/api/ng-pairs/${id}`, {
+      method: "DELETE",
+      headers: {
+        Authorization: `Bearer ${token}`,
+      },
+    });
+
+    const data = await response.json();
+
+    if (response.status === 401) {
+      window.location.assign("/login");
+      return;
+    }
+
+    if (!response.ok) {
+      throw new Error(
+        data.error ?? "NGペアの削除に失敗しました。"
+      );
+    }
+
+    if (data.deleted_id !== id) {
+      throw new Error(
+        "削除結果を確認できませんでした。"
+      );
+    }
+
+    alert("NGペアを削除しました！");
+
+    await fetchPairs();
+  } catch (error) {
+    alert(
+      error instanceof Error
+        ? error.message
+        : "NGペアの削除に失敗しました。"
+    );
   }
-
-  alert("NGペアを削除しました！");
-
-  await fetchPairs();
 };
-
   return (
     <div>
       <PageHeader

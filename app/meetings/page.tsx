@@ -1,5 +1,6 @@
 "use client";
 
+
 import {
   useEffect,
   useRef,
@@ -17,6 +18,7 @@ import ScheduleCalendar, {
   daysInMonth,
   expandDates,
 } from "@/components/common/ScheduleCalendar";
+import { useRouter } from "next/navigation";
 
 type Meeting = {
   id: number;
@@ -40,6 +42,7 @@ type Event = {
 };
 
 export default function MeetingsPage() {
+    const router = useRouter();
   const [activeTab, setActiveTab] = useState<"meetings" | "events">(
     "meetings"
   );
@@ -267,69 +270,190 @@ const visibleEvents = eventCalendarItems
   }
 };
 
-  const fetchEvents = async () => {
-    const response = await fetch("/api/events");
-    const data = await response.json();
+const fetchEvents = async () => {
+  try {
+    const { data: sessionData, error: sessionError } =
+      await supabase.auth.getSession();
 
-    if (!response.ok) {
-      alert(data.error ?? "予定一覧の取得に失敗しました");
+    if (sessionError) {
+      throw new Error(
+        "ログイン状態を確認できません。ログインし直してください。"
+      );
+    }
+
+    const token = sessionData.session?.access_token;
+
+    if (!token) {
       setEvents([]);
+      window.location.assign("/login");
       return;
     }
 
+    const response = await fetch("/api/events", {
+      headers: {
+        Authorization: `Bearer ${token}`,
+      },
+      cache: "no-store",
+    });
+
+    const data = await response.json();
+
+    if (response.status === 401) {
+      setEvents([]);
+      window.location.assign("/login");
+      return;
+    }
+
+    if (!response.ok) {
+      throw new Error(
+        typeof data?.error === "string"
+          ? data.error
+          : "予定一覧の取得に失敗しました。"
+      );
+    }
+
     setEvents(Array.isArray(data) ? data : []);
-  };
+  } catch (error) {
+    setEvents([]);
+
+    alert(
+      error instanceof Error
+        ? error.message
+        : "予定一覧の取得に失敗しました。"
+    );
+  }
+};
 
   useEffect(() => {
     fetchMeetings();
     fetchEvents();
   }, []);
 
-  const handleDeleteMeeting = async (id: number) => {
-    const isConfirmed = confirm("この会議を削除しますか？");
+ const handleDeleteMeeting = async (id: number) => {
+  const isConfirmed = confirm("この会議を削除しますか？");
 
-    if (!isConfirmed) {
+  if (!isConfirmed) {
+    return;
+  }
+
+  try {
+    const { data: sessionData, error: sessionError } =
+      await supabase.auth.getSession();
+
+    if (sessionError) {
+      throw new Error(
+        "ログイン状態を確認できません。"
+      );
+    }
+
+    const token = sessionData.session?.access_token;
+
+    if (!token) {
+      window.location.assign("/login");
       return;
     }
 
     const response = await fetch(`/api/meetings/${id}`, {
       method: "DELETE",
+      headers: {
+        Authorization: `Bearer ${token}`,
+      },
     });
 
     const data = await response.json();
 
-    if (!response.ok) {
-      alert(data.error ?? "会議の削除に失敗しました");
+    if (response.status === 401) {
+      window.location.assign("/login");
       return;
+    }
+
+    if (!response.ok) {
+      throw new Error(
+        typeof data?.error === "string"
+          ? data.error
+          : "会議の削除に失敗しました。"
+      );
+    }
+
+    if (data.deleted_id !== id) {
+      throw new Error(
+        "削除結果を確認できませんでした。"
+      );
     }
 
     alert("会議を削除しました！");
 
     await fetchMeetings();
-  };
+  } catch (error) {
+    alert(
+      error instanceof Error
+        ? error.message
+        : "会議の削除に失敗しました。"
+    );
+  }
+};
 
-  const handleDeleteEvent = async (id: number) => {
-    const isConfirmed = confirm("この予定を削除しますか？");
+const handleDeleteEvent = async (id: number) => {
+  const isConfirmed = confirm("この予定を削除しますか？");
 
-    if (!isConfirmed) {
+  if (!isConfirmed) {
+    return;
+  }
+
+  try {
+    const { data: sessionData, error: sessionError } =
+      await supabase.auth.getSession();
+
+    if (sessionError) {
+      throw new Error(
+        "ログイン状態を確認できません。"
+      );
+    }
+
+    const token = sessionData.session?.access_token;
+
+    if (!token) {
+      window.location.assign("/login");
       return;
     }
 
     const response = await fetch(`/api/events/${id}`, {
       method: "DELETE",
+      headers: {
+        Authorization: `Bearer ${token}`,
+      },
     });
 
     const data = await response.json();
 
-    if (!response.ok) {
-      alert(data.error ?? "予定の削除に失敗しました");
+    if (response.status === 401) {
+      window.location.assign("/login");
       return;
+    }
+
+    if (!response.ok) {
+      throw new Error(
+        data.error ?? "予定の削除に失敗しました。"
+      );
+    }
+
+    if (data.deleted_id !== id) {
+      throw new Error(
+        "削除結果を確認できませんでした。"
+      );
     }
 
     alert("予定を削除しました！");
 
     await fetchEvents();
-  };
+  } catch (error) {
+    alert(
+      error instanceof Error
+        ? error.message
+        : "予定の削除に失敗しました。"
+    );
+  }
+};
 
   return (
     <div>

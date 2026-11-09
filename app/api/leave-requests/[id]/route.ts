@@ -1,5 +1,8 @@
-import { NextRequest, NextResponse } from "next/server";
-import { supabase } from "@/lib/supabase";
+import { NextResponse } from "next/server";
+import {
+  AuthError,
+  getAuthenticatedSupabase,
+} from "@/lib/authenticated-supabase";
 import {
   parsePositiveId,
   validateLeaveRequest,
@@ -12,27 +15,91 @@ type RouteContext = {
   }>;
 };
 
+function reply(body: unknown, status = 200) {
+  return NextResponse.json(body, {
+    status,
+    headers: {
+      "Cache-Control": "private, no-store",
+      Vary: "Authorization",
+    },
+  });
+}
+
 // 取得
 export async function GET(
-  request: NextRequest,
+  request: Request,
   { params }: RouteContext
 ) {
-  const { id } = await params;
+  try {
+    const requestId =
+      parsePositiveId((await params).id);
 
-  const { data, error } = await supabase
-    .from("leave_requests")
-    .select("*")
-    .eq("id", id)
-    .single();
+    if (requestId === null) {
+      return reply(
+        {
+          error:
+            "希望休IDが正しくありません。",
+        },
+        400
+      );
+    }
 
-  if (error) {
-    return NextResponse.json(
-      { error: error.message },
-      { status: 500 }
+    const supabase =
+      await getAuthenticatedSupabase(request);
+
+    const { data, error } = await supabase
+      .from("leave_requests")
+      .select("*")
+      .eq("id", requestId)
+      .maybeSingle();
+
+    if (error) {
+      if (error.code === "42501") {
+        return reply(
+          {
+            error:
+              "希望休を閲覧する権限がありません。",
+          },
+          403
+        );
+      }
+
+      return reply(
+        {
+          error:
+            "希望休情報を取得できませんでした。",
+        },
+        500
+      );
+    }
+
+    if (!data) {
+      return reply(
+        {
+          error:
+            "希望休が見つかりません。",
+        },
+        404
+      );
+    }
+
+    return reply(data);
+  } catch (error) {
+    if (error instanceof AuthError) {
+      return reply(
+        { error: error.message },
+        error.status
+      );
+    }
+
+    return reply(
+      {
+        error:
+          "希望休情報の取得中に通信エラーが発生しました。",
+      },
+      503
     );
   }
-
-  return NextResponse.json(data);
 }
 
 // 更新
@@ -40,37 +107,47 @@ export async function PUT(
   request: Request,
   { params }: RouteContext
 ) {
-  const { id } = await params;
-  const requestId = parsePositiveId(id);
-
-  if (requestId === null) {
-    return NextResponse.json(
-      { error: "希望休IDが正しくありません。" },
-      { status: 400 }
-    );
-  }
-
-  let body: unknown;
-
   try {
-    body = await request.json();
-  } catch {
-    return NextResponse.json(
-      { error: "送信データの形式が正しくありません。" },
-      { status: 400 }
-    );
-  }
+    const requestId =
+      parsePositiveId((await params).id);
 
-  const result = validateLeaveRequest(body, "update");
+    if (requestId === null) {
+      return reply(
+        {
+          error:
+            "希望休IDが正しくありません。",
+        },
+        400
+      );
+    }
 
-  if (!result.ok) {
-    return NextResponse.json(
-      { error: result.error },
-      { status: 400 }
-    );
-  }
+    const supabase =
+      await getAuthenticatedSupabase(request);
 
-  try {
+    let body: unknown;
+
+    try {
+      body = await request.json();
+    } catch {
+      return reply(
+        {
+          error:
+            "送信データの形式が正しくありません。",
+        },
+        400
+      );
+    }
+
+    const result =
+      validateLeaveRequest(body, "update");
+
+    if (!result.ok) {
+      return reply(
+        { error: result.error },
+        400
+      );
+    }
+
     const { data, error } = await supabase
       .from("leave_requests")
       .update(result.data)
@@ -79,54 +156,76 @@ export async function PUT(
       .maybeSingle();
 
     if (error) {
-      const resultError = getLeaveDbError(error.code);
+      if (error.code === "42501") {
+        return reply(
+          {
+            error:
+              "希望休を更新する権限がありません。",
+          },
+          403
+        );
+      }
 
-      return NextResponse.json(
+      const resultError =
+        getLeaveDbError(error.code);
+
+      return reply(
         { error: resultError.message },
-        { status: resultError.status }
+        resultError.status
       );
     }
 
     if (!data) {
-      return NextResponse.json(
+      return reply(
         {
           error:
             "更新対象の希望休が見つからないか、更新権限がありません。",
         },
-        { status: 404 }
+        404
       );
     }
 
-    return NextResponse.json(data);
-  } catch {
-    return NextResponse.json(
+    return reply(data);
+  } catch (error) {
+    if (error instanceof AuthError) {
+      return reply(
+        { error: error.message },
+        error.status
+      );
+    }
+
+    return reply(
       {
         error:
-          "通信に失敗しました。一覧を再読み込みして、更新結果を確認してください。",
+          "希望休更新中に通信エラーが発生しました。",
       },
-      { status: 500 }
+      503
     );
   }
 }
 
 // 削除
-// 削除
 export async function DELETE(
-  _request: Request,
+  request: Request,
   { params }: RouteContext
 ) {
-  const { id } = await params;
-  const requestId = parsePositiveId(id);
-
-  if (requestId === null) {
-    return NextResponse.json(
-      { error: "希望休IDが正しくありません。" },
-      { status: 400 }
-    );
-  }
-
   try {
-    // 指定した1件を削除し、削除されたデータのIDを取得する
+    const requestId =
+      parsePositiveId((await params).id);
+
+    if (requestId === null) {
+      return reply(
+        {
+          error:
+            "希望休IDが正しくありません。",
+        },
+        400
+      );
+    }
+
+    const supabase =
+      await getAuthenticatedSupabase(request);
+
     const { data, error } = await supabase
       .from("leave_requests")
       .delete()
@@ -136,58 +235,62 @@ export async function DELETE(
 
     if (error) {
       if (error.code === "42501") {
-        return NextResponse.json(
+        return reply(
           {
             error:
-              "削除権限がありません。アクセス権限を確認してください。",
+              "希望休を削除する権限がありません。",
           },
-          { status: 403 }
+          403
         );
       }
 
       if (error.code === "23503") {
-        return NextResponse.json(
+        return reply(
           {
             error:
               "ほかのデータから参照されているため削除できません。申請を取り消す場合は、編集画面で状態を「取消」に変更してください。",
           },
-          { status: 409 }
+          409
         );
       }
 
-      console.error("希望休削除エラー:", error.code);
-
-      return NextResponse.json(
+      return reply(
         {
           error:
             "削除結果を確認できませんでした。一覧を再読み込みしてください。",
         },
-        { status: 500 }
+        500
       );
     }
 
-    // 0件だった場合は「削除成功」と返さない
     if (!data) {
-      return NextResponse.json(
+      return reply(
         {
           error:
-            "対象の希望休がすでに削除されているか、削除権限がありません。一覧を再読み込みしてください。",
+            "対象の希望休がすでに削除されているか、削除権限がありません。",
         },
-        { status: 404 }
+        404
       );
     }
 
-    return NextResponse.json({
+    return reply({
       message: "希望休を削除しました。",
       deleted_id: data.id,
     });
-  } catch {
-    return NextResponse.json(
+  } catch (error) {
+    if (error instanceof AuthError) {
+      return reply(
+        { error: error.message },
+        error.status
+      );
+    }
+
+    return reply(
       {
         error:
-          "通信に失敗しました。一覧を再読み込みして、削除結果を確認してください。",
+          "希望休削除中に通信エラーが発生しました。",
       },
-      { status: 500 }
+      503
     );
   }
 }

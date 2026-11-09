@@ -5,11 +5,13 @@ import PrimaryButton from "@/components/ui/PrimaryButton";
 import Input from "@/components/ui/Input";
 import Select from "@/components/ui/Select";
 import { useState } from "react";
+import { useRouter } from "next/navigation";
+import { supabase } from "@/lib/supabase";
 
 
 
 export default function NewStaffPage() {
-
+const router = useRouter();
   const [form, setForm] = useState({
   employee_no: "",
   name: "",
@@ -26,39 +28,56 @@ export default function NewStaffPage() {
 });
 
 
- const handleSubmit = async () => {
+const handleSubmit = async () => {
+  try {
+    const { data: sessionData, error: sessionError } =
+      await supabase.auth.getSession();
+
+    if (sessionError) {
+      alert("ログイン状態を確認できません。");
+      return;
+    }
+
+    const token = sessionData.session?.access_token;
+
+    if (!token) {
+      alert("ログインが必要です。");
+      router.push("/login");
+      return;
+    }
+
     const response = await fetch("/api/staffs", {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
+        Authorization: `Bearer ${token}`,
       },
       body: JSON.stringify(form),
     });
 
+    if (response.status === 401) {
+      alert("ログインし直してください。");
+      router.push("/login");
+      return;
+    }
+
+    const data = await response.json();
+
     if (!response.ok) {
-  const error = await response.json();
-  console.log(error);
-  alert(error.error);
-  return;
-}
+      alert(data.error ?? "スタッフの登録に失敗しました。");
+      return;
+    }
 
     alert("スタッフを登録しました！");
 
-    setForm({
-      employee_no: "",
-      name: "",
-      gender: "",
-      job_type: "",
-      team: "",
-      role: "",
-      can_night_shift: false,
-      employment_status: "在籍中",
-  is_active: true,
-  joined_date: "",
-  retired_date: "",
-  remarks: "",
-    });
-  };
+    router.push("/staffs");
+    router.refresh();
+  } catch {
+    alert(
+      "通信に失敗しました。登録済みの可能性があるため、再登録前にスタッフ一覧を確認してください。"
+    );
+  }
+};
 
   return (
     <div className="max-w-3xl">

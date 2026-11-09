@@ -1,5 +1,7 @@
 "use client";
 
+import { useRouter } from "next/navigation";
+import { supabase } from "@/lib/supabase";
 import PageHeader from "@/components/common/PageHeader";
 import PrimaryButton from "@/components/ui/PrimaryButton";
 import Input from "@/components/ui/Input";
@@ -20,6 +22,7 @@ type Staff = {
 };
 
 export default function NewNgPairPage() {
+    const router = useRouter();
   const [form, setForm] = useState<NgPairForm>({
     staff_a_id: "",
     staff_b_id: "",
@@ -31,16 +34,50 @@ export default function NewNgPairPage() {
 
 useEffect(() => {
   const fetchStaffs = async () => {
-    const response = await fetch("/api/staffs");
-    const data = await response.json();
+  try {
+    const { data: sessionData, error: sessionError } =
+      await supabase.auth.getSession();
 
-    if (!response.ok) {
-      alert(data.error ?? "スタッフ一覧の取得に失敗しました");
+    if (sessionError) {
+      throw new Error("ログイン状態を確認できません。");
+    }
+
+    const token = sessionData.session?.access_token;
+
+    if (!token) {
+      router.push("/login");
       return;
     }
 
-    setStaffs(data);
-  };
+    const response = await fetch("/api/staffs", {
+      headers: {
+        Authorization: `Bearer ${token}`,
+      },
+      cache: "no-store",
+    });
+
+    const data = await response.json();
+
+    if (response.status === 401) {
+      router.push("/login");
+      return;
+    }
+
+    if (!response.ok) {
+      throw new Error(
+        data.error ?? "スタッフ一覧の取得に失敗しました。"
+      );
+    }
+
+    setStaffs(Array.isArray(data) ? data : []);
+  } catch (error) {
+    alert(
+      error instanceof Error
+        ? error.message
+        : "スタッフ一覧の取得に失敗しました。"
+    );
+  }
+};
 
   fetchStaffs();
 }, []);
@@ -56,44 +93,59 @@ const handleSubmit = async () => {
     return;
   }
 
-  if (!form.staff_a_id || !form.staff_b_id) {
-  alert("スタッフAとスタッフBを選択してください");
-  return;
-}
+  try {
+    const { data: sessionData, error: sessionError } =
+      await supabase.auth.getSession();
 
-if (form.staff_a_id === form.staff_b_id) {
-  alert("同じスタッフ同士はNGペアに登録できません");
-  return;
-}
+    if (sessionError) {
+      throw new Error("ログイン状態を確認できません。");
+    }
 
-  const response = await fetch("/api/ng-pairs", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
-      staff_a_id: Number(form.staff_a_id),
-      staff_b_id: Number(form.staff_b_id),
-      reason: form.reason,
-      is_active: form.is_active,
-    }),
-  });
+    const token = sessionData.session?.access_token;
 
-  const data = await response.json();
+    if (!token) {
+      router.push("/login");
+      return;
+    }
 
-  if (!response.ok) {
-    alert(data.error ?? "NGペアの登録に失敗しました");
-    return;
+    const response = await fetch("/api/ng-pairs", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${token}`,
+      },
+      body: JSON.stringify({
+        staff_a_id: Number(form.staff_a_id),
+        staff_b_id: Number(form.staff_b_id),
+        reason: form.reason,
+        is_active: form.is_active,
+      }),
+    });
+
+    const data = await response.json();
+
+    if (response.status === 401) {
+      router.push("/login");
+      return;
+    }
+
+    if (!response.ok) {
+      throw new Error(
+        data.error ?? "NGペアの登録に失敗しました。"
+      );
+    }
+
+    alert("NGペアを登録しました！");
+
+    router.push("/ng-pairs");
+    router.refresh();
+  } catch (error) {
+    alert(
+      error instanceof Error
+        ? error.message
+        : "NGペアの登録に失敗しました。"
+    );
   }
-
-  alert("NGペアを登録しました！");
-
-  setForm({
-    staff_a_id: "",
-    staff_b_id: "",
-    reason: "",
-    is_active: true,
-  });
 };
 
   return (

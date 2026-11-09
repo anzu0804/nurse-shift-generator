@@ -1,5 +1,6 @@
 "use client";
 
+import { supabase } from "@/lib/supabase";
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import PageHeader from "@/components/common/PageHeader";
@@ -34,64 +35,119 @@ export default function NewLeaveRequestPage() {
     note: "",
   });
 
-  useEffect(() => {
-    const fetchStaffs = async () => {
-      const response = await fetch("/api/staffs");
-      const data = await response.json();
+ useEffect(() => {
+  const fetchStaffs = async () => {
+    const { data: sessionData, error: sessionError } =
+      await supabase.auth.getSession();
 
-      if (!response.ok) {
-        alert(data.error ?? "スタッフ一覧の取得に失敗しました");
-        return;
-      }
-
-      setStaffs(Array.isArray(data) ? data : []);
-    };
-
-    fetchStaffs();
-  }, []);
-
-  const handleSubmit = async () => {
-    if (!form.staff_id) {
-      alert("スタッフを選択してください");
+    if (sessionError) {
+      alert("ログイン状態を確認できません。");
       return;
     }
 
-    if (!form.leave_date) {
-      alert("希望日を入力してください");
+    const token = sessionData.session?.access_token;
+
+    if (!token) {
+      router.push("/login");
       return;
     }
 
-    if (!form.leave_type) {
-      alert("休暇種別を選択してください");
-      return;
-    }
-
-    const response = await fetch("/api/leave-requests", {
-      method: "POST",
+    const response = await fetch("/api/staffs", {
       headers: {
-        "Content-Type": "application/json",
+        Authorization: `Bearer ${token}`,
       },
-      body: JSON.stringify({
-        staff_id: Number(form.staff_id),
-        leave_date: form.leave_date,
-        leave_type: form.leave_type,
-        status: form.status,
-        note: form.note,
-      }),
+      cache: "no-store",
     });
 
     const data = await response.json();
 
-    if (!response.ok) {
-      alert(data.error ?? "登録に失敗しました");
+    if (response.status === 401) {
+      router.push("/login");
       return;
     }
 
-    alert("希望休を登録しました！");
+    if (!response.ok) {
+      alert(
+        data.error ?? "スタッフ一覧の取得に失敗しました"
+      );
+      return;
+    }
 
-    router.push("/leave-requests");
-    router.refresh();
+    setStaffs(Array.isArray(data) ? data : []);
   };
+
+  void fetchStaffs();
+}, [router]);
+
+ const handleSubmit = async () => {
+  if (!form.staff_id) {
+    alert("スタッフを選択してください");
+    return;
+  }
+
+  if (!form.leave_date) {
+    alert("希望日を入力してください");
+    return;
+  }
+
+  if (!form.leave_type) {
+    alert("休暇種別を選択してください");
+    return;
+  }
+
+  // ① ログイン中のセッションを取得
+  const { data: sessionData, error: sessionError } =
+    await supabase.auth.getSession();
+
+  if (sessionError) {
+    alert("ログイン状態を確認できません。");
+    return;
+  }
+
+  // ② APIに渡すアクセストークンを取得
+  const token = sessionData.session?.access_token;
+
+  if (!token) {
+    alert("ログインが必要です。");
+    router.push("/login");
+    return;
+  }
+
+  // ③ Authorization付きで希望休を登録
+  const response = await fetch("/api/leave-requests", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${token}`,
+    },
+    body: JSON.stringify({
+      staff_id: Number(form.staff_id),
+      leave_date: form.leave_date,
+      leave_type: form.leave_type,
+      status: form.status,
+      note: form.note,
+    }),
+  });
+
+  const data = await response.json();
+
+  // セッション切れ
+  if (response.status === 401) {
+    alert("ログインし直してください。");
+    router.push("/login");
+    return;
+  }
+
+  if (!response.ok) {
+    alert(data.error ?? "登録に失敗しました");
+    return;
+  }
+
+  alert("希望休を登録しました！");
+
+  router.push("/leave-requests");
+  router.refresh();
+};
 
   return (
     <div className="max-w-3xl">

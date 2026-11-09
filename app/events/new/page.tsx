@@ -6,6 +6,7 @@ import PageHeader from "@/components/common/PageHeader";
 import PrimaryButton from "@/components/ui/PrimaryButton";
 import Input from "@/components/ui/Input";
 import Select from "@/components/ui/Select";
+import { supabase } from "@/lib/supabase";
 
 type EventForm = {
   event_name: string;
@@ -31,13 +32,35 @@ export default function NewEventPage() {
   });
 
   const handleCreate = async () => {
-    if (!form.event_name) {
-      alert("予定名を入力してください");
+  if (!form.event_name.trim()) {
+    alert("予定名を入力してください");
+    return;
+  }
+
+  if (
+    form.recurrence_type === "なし" &&
+    !form.event_date
+  ) {
+    alert("開催日を入力してください");
+    return;
+  }
+
+  try {
+    const { data: sessionData, error: sessionError } =
+      await supabase.auth.getSession();
+
+    if (sessionError) {
+      alert(
+        "ログイン状態を確認できません。ログインし直してください。"
+      );
       return;
     }
 
-    if (!form.event_date) {
-      alert("開催日を入力してください");
+    const token = sessionData.session?.access_token;
+
+    if (!token) {
+      alert("ログインが必要です。");
+      router.push("/login");
       return;
     }
 
@@ -45,14 +68,23 @@ export default function NewEventPage() {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
+        Authorization: `Bearer ${token}`,
       },
       body: JSON.stringify(form),
     });
 
+    if (response.status === 401) {
+      alert("ログインし直してください。");
+      router.push("/login");
+      return;
+    }
+
     const data = await response.json();
 
     if (!response.ok) {
-      alert(data.error ?? "登録に失敗しました");
+      alert(
+        data.error ?? "予定の登録に失敗しました"
+      );
       return;
     }
 
@@ -60,7 +92,12 @@ export default function NewEventPage() {
 
     router.push("/meetings");
     router.refresh();
-  };
+  } catch {
+    alert(
+      "通信に失敗しました。登録済みの可能性があるため、再登録前に一覧を確認してください。"
+    );
+  }
+};
 
   return (
     <div className="max-w-3xl">

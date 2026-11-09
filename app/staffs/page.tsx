@@ -5,6 +5,7 @@ import PrimaryButton from "@/components/ui/PrimaryButton";
 import StatusBadge from "@/components/ui/StatusBadge";
 import { useEffect, useState } from "react";
 import Link from "next/link";
+import { supabase } from "@/lib/supabase";
 
 type Staff = {
   id: number;
@@ -61,10 +62,56 @@ const [genderFilter, setGenderFilter] = useState("すべて");
 const [showFilters, setShowFilters] = useState(false);
 
 const fetchStaffs = async () => {
-    const response = await fetch("/api/staffs");
+  try {
+    const { data: sessionData, error: sessionError } =
+      await supabase.auth.getSession();
+
+    if (sessionError) {
+      throw new Error(
+        "ログイン状態を確認できません。"
+      );
+    }
+
+    const token = sessionData.session?.access_token;
+
+    if (!token) {
+      window.location.assign("/login");
+      return;
+    }
+
+    const response = await fetch("/api/staffs", {
+      headers: {
+        Authorization: `Bearer ${token}`,
+      },
+      cache: "no-store",
+    });
+
     const data = await response.json();
-    setStaffs(data);
-  };
+
+    if (response.status === 401) {
+      window.location.assign("/login");
+      return;
+    }
+
+    if (!response.ok) {
+      throw new Error(
+        typeof data?.error === "string"
+          ? data.error
+          : "スタッフ一覧の取得に失敗しました。"
+      );
+    }
+
+    setStaffs(Array.isArray(data) ? data : []);
+  } catch (error) {
+    setStaffs([]);
+
+    alert(
+      error instanceof Error
+        ? error.message
+        : "スタッフ一覧の取得に失敗しました。"
+    );
+  }
+};
 
  const filteredStaffs = staffs
   .filter((staff) => {
@@ -144,43 +191,82 @@ useEffect(() => {
   fetchStaffs();
 }, []);
 
-const handleRetire = async (id: number, name: string) => {
+const handleRetire = async (
+  id: number,
+  name: string
+) => {
   const isConfirmed = confirm(
-  `${name}さんを退職済みに変更します。\n\nこのスタッフはシフト作成対象外になります。\nよろしいですか？`
-);
+    `${name}さんを退職済みに変更します。\n\nこのスタッフはシフト作成対象外になります。\nよろしいですか？`
+  );
 
   if (!isConfirmed) {
     return;
   }
 
-  const today = new Date().toISOString().split("T")[0];
+  try {
+    const { data: sessionData, error: sessionError } =
+      await supabase.auth.getSession();
 
-  const response = await fetch(`/api/staffs/${id}`, {
-    method: "PATCH",
-    headers: {
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
-      employment_status: "退職済み",
-      is_active: false,
-      retired_date: today,
-    }),
-  });
+    if (sessionError) {
+      throw new Error(
+        "ログイン状態を確認できません。"
+      );
+    }
 
-  const data = await response.json();
+    const token = sessionData.session?.access_token;
 
-  if (!response.ok) {
-    alert(data.error ?? "退職処理に失敗しました");
-    return;
+    if (!token) {
+      window.location.assign("/login");
+      return;
+    }
+
+    const today = new Date()
+      .toISOString()
+      .split("T")[0];
+
+    const response = await fetch(`/api/staffs/${id}`, {
+      method: "PATCH",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${token}`,
+      },
+      body: JSON.stringify({
+        employment_status: "退職済み",
+        is_active: false,
+        retired_date: today,
+      }),
+    });
+
+    const data = await response.json();
+
+    if (response.status === 401) {
+      window.location.assign("/login");
+      return;
+    }
+
+    if (!response.ok) {
+      throw new Error(
+        data.error ?? "退職処理に失敗しました。"
+      );
+    }
+
+    alert(`${name}さんを退職済みに変更しました`);
+
+    await fetchStaffs();
+  } catch (error) {
+    alert(
+      error instanceof Error
+        ? error.message
+        : "退職処理に失敗しました。"
+    );
   }
-
-  alert(`${name}さんを退職済みに変更しました`);
-
-  await fetchStaffs();
 };
 
 
-const handleDelete = async (id: number, name: string) => {
+const handleDelete = async (
+  id: number,
+  name: string
+) => {
   const isConfirmed = confirm(
     `${name}さんを完全に削除しますか？\nこの操作は元に戻せません。`
   );
@@ -189,20 +275,59 @@ const handleDelete = async (id: number, name: string) => {
     return;
   }
 
-  const response = await fetch(`/api/staffs/${id}`, {
-    method: "DELETE",
-  });
+  try {
+    const { data: sessionData, error: sessionError } =
+      await supabase.auth.getSession();
 
-  const data = await response.json();
+    if (sessionError) {
+      throw new Error(
+        "ログイン状態を確認できません。"
+      );
+    }
 
-  if (!response.ok) {
-    alert(data.error ?? "削除に失敗しました");
-    return;
+    const token = sessionData.session?.access_token;
+
+    if (!token) {
+      window.location.assign("/login");
+      return;
+    }
+
+    const response = await fetch(`/api/staffs/${id}`, {
+      method: "DELETE",
+      headers: {
+        Authorization: `Bearer ${token}`,
+      },
+    });
+
+    const data = await response.json();
+
+    if (response.status === 401) {
+      window.location.assign("/login");
+      return;
+    }
+
+    if (!response.ok) {
+      throw new Error(
+        data.error ?? "削除に失敗しました。"
+      );
+    }
+
+    if (data.deleted_id !== id) {
+      throw new Error(
+        "削除結果を確認できませんでした。"
+      );
+    }
+
+    alert(`${name}さんを削除しました`);
+
+    await fetchStaffs();
+  } catch (error) {
+    alert(
+      error instanceof Error
+        ? error.message
+        : "削除に失敗しました。"
+    );
   }
-
-  alert(`${name}さんを削除しました`);
-
-  await fetchStaffs();
 };
 
 const handleCsvExport = () => {

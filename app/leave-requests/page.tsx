@@ -1,5 +1,6 @@
 "use client";
 
+import { supabase } from "@/lib/supabase";
 import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import PageHeader from "@/components/common/PageHeader";
@@ -79,9 +80,29 @@ async function fetchJson(
   url: string,
   options: RequestInit = {}
 ): Promise<unknown> {
+  const { data: sessionData, error: sessionError } =
+    await supabase.auth.getSession();
+
+  if (sessionError) {
+    throw new Error(
+      "ログイン状態を確認できません。"
+    );
+  }
+
+  const token = sessionData.session?.access_token;
+
+  if (!token) {
+    window.location.assign("/login");
+    throw new Error("ログインが必要です。");
+  }
+
   const response = await fetch(url, {
     ...options,
     cache: "no-store",
+    headers: {
+      ...(options.headers ?? {}),
+      Authorization: `Bearer ${token}`,
+    },
   });
 
   let body: unknown;
@@ -92,6 +113,11 @@ async function fetchJson(
     throw new Error(
       `APIの応答を読み取れませんでした（HTTP ${response.status}）。`
     );
+  }
+
+  if (response.status === 401) {
+    window.location.assign("/login");
+    throw new Error("ログインし直してください。");
   }
 
   if (!response.ok) {

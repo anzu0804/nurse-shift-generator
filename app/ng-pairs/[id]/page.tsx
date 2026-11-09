@@ -1,5 +1,6 @@
 "use client";
 
+import { supabase } from "@/lib/supabase";
 import { useEffect, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import PageHeader from "@/components/common/PageHeader";
@@ -38,54 +39,141 @@ export default function EditNgPairPage() {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    const fetchData = async () => {
-      const pairResponse = await fetch(`/api/ng-pairs/${id}`);
-      const pair = await pairResponse.json();
+   const fetchData = async () => {
+  try {
+    const { data: sessionData, error: sessionError } =
+      await supabase.auth.getSession();
 
-      const staffResponse = await fetch("/api/staffs");
-      const staffData = await staffResponse.json();
+    if (sessionError) {
+      throw new Error("ログイン状態を確認できません。");
+    }
 
-      setStaffs(staffData);
+    const token = sessionData.session?.access_token;
 
-      setForm({
-        staff_a_id: String(pair.staff_a_id),
-        staff_b_id: String(pair.staff_b_id),
-        reason: pair.reason ?? "",
-        is_active: pair.is_active,
-      });
+    if (!token) {
+      router.push("/login");
+      return;
+    }
 
-      setLoading(false);
-    };
+    const [pairResponse, staffResponse] =
+      await Promise.all([
+        fetch(`/api/ng-pairs/${id}`, {
+          headers: {
+            Authorization: `Bearer ${token}`,
+          },
+          cache: "no-store",
+        }),
+        fetch("/api/staffs", {
+          headers: {
+            Authorization: `Bearer ${token}`,
+          },
+          cache: "no-store",
+        }),
+      ]);
+
+    if (
+      pairResponse.status === 401 ||
+      staffResponse.status === 401
+    ) {
+      router.push("/login");
+      return;
+    }
+
+    const [pair, staffData] = await Promise.all([
+      pairResponse.json(),
+      staffResponse.json(),
+    ]);
+
+    if (!pairResponse.ok) {
+      throw new Error(
+        pair.error ?? "NGペア情報の取得に失敗しました。"
+      );
+    }
+
+    if (!staffResponse.ok) {
+      throw new Error(
+        staffData.error ??
+          "スタッフ一覧の取得に失敗しました。"
+      );
+    }
+
+    setStaffs(Array.isArray(staffData) ? staffData : []);
+
+    setForm({
+      staff_a_id: String(pair.staff_a_id),
+      staff_b_id: String(pair.staff_b_id),
+      reason: pair.reason ?? "",
+      is_active: pair.is_active,
+    });
+  } catch (error) {
+    alert(
+      error instanceof Error
+        ? error.message
+        : "読み込みに失敗しました。"
+    );
+  } finally {
+    setLoading(false);
+  }
+};
 
     fetchData();
   }, [id]);
 
-  const handleUpdate = async () => {
-  const response = await fetch(`/api/ng-pairs/${id}`, {
-    method: "PUT",
-    headers: {
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
-      staff_a_id: Number(form.staff_a_id),
-      staff_b_id: Number(form.staff_b_id),
-      reason: form.reason,
-      is_active: form.is_active,
-    }),
-  });
+const handleUpdate = async () => {
+  try {
+    const { data: sessionData, error: sessionError } =
+      await supabase.auth.getSession();
 
-  const data = await response.json();
+    if (sessionError) {
+      throw new Error("ログイン状態を確認できません。");
+    }
 
-  if (!response.ok) {
-    alert(data.error ?? "更新に失敗しました");
-    return;
+    const token = sessionData.session?.access_token;
+
+    if (!token) {
+      router.push("/login");
+      return;
+    }
+
+    const response = await fetch(`/api/ng-pairs/${id}`, {
+      method: "PUT",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${token}`,
+      },
+      body: JSON.stringify({
+        staff_a_id: Number(form.staff_a_id),
+        staff_b_id: Number(form.staff_b_id),
+        reason: form.reason,
+        is_active: form.is_active,
+      }),
+    });
+
+    const data = await response.json();
+
+    if (response.status === 401) {
+      router.push("/login");
+      return;
+    }
+
+    if (!response.ok) {
+      throw new Error(
+        data.error ?? "NGペアの更新に失敗しました。"
+      );
+    }
+
+    alert("NGペアを更新しました！");
+
+    router.push("/ng-pairs");
+    router.refresh();
+  } catch (error) {
+    alert(
+      error instanceof Error
+        ? error.message
+        : "NGペアの更新に失敗しました。"
+    );
   }
-
-  alert("NGペアを更新しました！");
-
-  router.push("/ng-pairs");
 };
-
 if (loading) {
   return <p>読み込み中...</p>;
 }

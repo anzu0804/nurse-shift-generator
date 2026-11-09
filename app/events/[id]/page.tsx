@@ -1,5 +1,6 @@
 "use client";
 
+import { supabase } from "@/lib/supabase";
 import { useEffect, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import PageHeader from "@/components/common/PageHeader";
@@ -36,7 +37,28 @@ export default function EditEventPage() {
 
   useEffect(() => {
     const fetchEvent = async () => {
-      const response = await fetch(`/api/events/${id}`);
+      const { data: sessionData, error: sessionError } =
+  await supabase.auth.getSession();
+
+if (sessionError) {
+  alert("ログイン状態を確認できません。");
+  return;
+}
+
+const token = sessionData.session?.access_token;
+
+if (!token) {
+  router.push("/login");
+  return;
+}
+
+const response = await fetch(`/api/events/${id}`, {
+  headers: {
+    Authorization: `Bearer ${token}`,
+  },
+  cache: "no-store",
+});
+
       const data = await response.json();
 
       if (!response.ok) {
@@ -71,13 +93,30 @@ export default function EditEventPage() {
       return;
     }
 
-    const response = await fetch(`/api/events/${id}`, {
-      method: "PUT",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify(form),
-    });
+   const { data: sessionData, error: sessionError } =
+  await supabase.auth.getSession();
+
+if (sessionError) {
+  alert("ログイン状態を確認できません。");
+  return;
+}
+
+const token = sessionData.session?.access_token;
+
+if (!token) {
+  alert("ログインが必要です。");
+  router.push("/login");
+  return;
+}
+
+const response = await fetch(`/api/events/${id}`, {
+  method: "PUT",
+  headers: {
+    "Content-Type": "application/json",
+    Authorization: `Bearer ${token}`,
+  },
+  body: JSON.stringify(form),
+});
 
     const data = await response.json();
 
