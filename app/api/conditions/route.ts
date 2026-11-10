@@ -20,6 +20,8 @@ type ConditionInput = {
   assistant_late_staff_count: number;
   bath_nurse_count: number;
   bath_assistant_count: number;
+  night_shift_next_day_after: boolean;
+balance_weekend_shifts: boolean;
 };
 
 function reply(body: unknown, status = 200) {
@@ -200,6 +202,11 @@ function validateCondition(
         values.bath_nurse_count,
       bath_assistant_count:
         values.bath_assistant_count,
+        night_shift_next_day_after:
+  body.night_shift_next_day_after !== false,
+
+balance_weekend_shifts:
+  body.balance_weekend_shifts !== false,
     },
   };
 }
@@ -276,6 +283,8 @@ export async function GET(request: Request) {
         bath_nurse_count: 1,
         bath_assistant_count: 2,
         is_saved: false,
+        night_shift_next_day_after: true,
+balance_weekend_shifts: true,
       });
     }
 

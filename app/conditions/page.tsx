@@ -22,6 +22,8 @@ type ConditionForm = {
   assistant_late_staff_count: number;
   bath_nurse_count: number;
   bath_assistant_count: number;
+  night_shift_next_day_after: boolean;
+balance_weekend_shifts: boolean;
 };
 
 const current = new Date();
@@ -42,6 +44,8 @@ const initialForm: ConditionForm = {
   assistant_late_staff_count: 0,
   bath_nurse_count: 1,
   bath_assistant_count: 2,
+  night_shift_next_day_after: true,
+balance_weekend_shifts: true,
 };
 
 export default function ConditionsPage() {
@@ -141,6 +145,11 @@ export default function ConditionsPage() {
         bath_assistant_count: Number(
           data.bath_assistant_count ?? 2
         ),
+        night_shift_next_day_after:
+  data.night_shift_next_day_after !== false,
+
+balance_weekend_shifts:
+  data.balance_weekend_shifts !== false,
       });
 
       setIsSaved(Boolean(data.is_saved));
@@ -362,6 +371,64 @@ export default function ConditionsPage() {
             )}
           </div>
         </section>
+
+<section className="rounded-xl border border-slate-200 bg-white p-6 shadow-sm">
+  <h2 className="mb-5 text-lg font-bold">
+    勤務ルール
+  </h2>
+
+  <div className="space-y-4">
+    <label className="flex items-start gap-3">
+      <input
+        type="checkbox"
+        checked={form.night_shift_next_day_after}
+        onChange={(e) =>
+          setForm((prev) => ({
+            ...prev,
+            night_shift_next_day_after:
+              e.target.checked,
+          }))
+        }
+        className="mt-1 h-4 w-4"
+      />
+
+      <div>
+        <p className="font-medium">
+          夜勤の翌日は「明け」にする
+        </p>
+
+        <p className="text-sm text-slate-500">
+          夜勤勤務の翌日を明け勤務として扱います。
+        </p>
+      </div>
+    </label>
+
+    <label className="flex items-start gap-3">
+      <input
+        type="checkbox"
+        checked={form.balance_weekend_shifts}
+        onChange={(e) =>
+          setForm((prev) => ({
+            ...prev,
+            balance_weekend_shifts:
+              e.target.checked,
+          }))
+        }
+        className="mt-1 h-4 w-4"
+      />
+
+      <div>
+        <p className="font-medium">
+          土日勤務をできるだけ均等にする
+        </p>
+
+        <p className="text-sm text-slate-500">
+          スタッフ間で土日の勤務回数に偏りが出にくいようにします。
+        </p>
+      </div>
+    </label>
+  </div>
+</section>
 
         <section className="rounded-xl border border-slate-200 bg-white p-6 shadow-sm">
           <h2 className="mb-5 text-lg font-bold">
