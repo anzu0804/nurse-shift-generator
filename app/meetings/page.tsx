@@ -177,7 +177,7 @@ const eventCalendarItems = filteredEvents.map((event) => ({
 
 // 表示月の開催日ごとに、会議の一覧行を作る
 const visibleMeetings: MeetingListRow[] = meetingCalendarItems
-  .flatMap((item) => {
+  .flatMap<MeetingListRow>((item) => {
     const { dates, warning } = expandDates(
       item,
       calendarMonth,
@@ -235,7 +235,7 @@ const visibleMeetings: MeetingListRow[] = meetingCalendarItems
 
 // 表示月の開催日ごとに、予定の一覧行を作る
 const visibleEvents: EventListRow[] = eventCalendarItems
-  .flatMap((item) => {
+  .flatMap<EventListRow>((item) => {
     const { dates, warning } = expandDates(
       item,
       calendarMonth,
