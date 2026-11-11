@@ -41,6 +41,16 @@ type Event = {
   note: string | null;
 };
 
+type MeetingListRow = Meeting & {
+  occurrence_date: string | null;
+  display_warning: string | null;
+};
+
+type EventListRow = Event & {
+  occurrence_date: string | null;
+  display_warning: string | null;
+};
+
 export default function MeetingsPage() {
     const router = useRouter();
   const [activeTab, setActiveTab] = useState<"meetings" | "events">(
@@ -166,48 +176,119 @@ const eventCalendarItems = filteredEvents.map((event) => ({
 }));
 
 // 表示月の開催日ごとに、会議の一覧行を作る
-const visibleMeetings = meetingCalendarItems
+const visibleMeetings: MeetingListRow[] = meetingCalendarItems
   .flatMap((item) => {
-    const { dates } = expandDates(
+    const { dates, warning } = expandDates(
       item,
       calendarMonth,
       calendarDays
     );
 
+    // 繰り返し条件などが不正でも、
+    // 編集できるよう一覧には残す
+    if (warning) {
+      const fallbackDate =
+        item.source.meeting_date?.startsWith(
+          `${calendarMonth}-`
+        )
+          ? item.source.meeting_date
+          : null;
+
+      if (
+        selectedDate &&
+        fallbackDate !== selectedDate
+      ) {
+        return [];
+      }
+
+      return [
+        {
+          ...item.source,
+          occurrence_date: fallbackDate,
+          display_warning: warning,
+        },
+      ];
+    }
+
     return dates
-      .filter((date) => !selectedDate || date === selectedDate)
+      .filter(
+        (date) =>
+          !selectedDate || date === selectedDate
+      )
       .map((date) => ({
         ...item.source,
         occurrence_date: date,
+        display_warning: null,
       }));
   })
-  .sort(
-    (a, b) =>
-      a.occurrence_date.localeCompare(b.occurrence_date) ||
+  .sort((a, b) => {
+    if (!a.occurrence_date) return 1;
+    if (!b.occurrence_date) return -1;
+
+    return (
+      a.occurrence_date.localeCompare(
+        b.occurrence_date
+      ) ||
       a.id - b.id
-  );
+    );
+  });
 
 // 表示月の開催日ごとに、予定の一覧行を作る
-const visibleEvents = eventCalendarItems
+const visibleEvents: EventListRow[] = eventCalendarItems
   .flatMap((item) => {
-    const { dates } = expandDates(
+    const { dates, warning } = expandDates(
       item,
       calendarMonth,
       calendarDays
     );
 
+    // 不正な繰り返し条件でも一覧から消さない
+    if (warning) {
+      const fallbackDate =
+        item.source.event_date?.startsWith(
+          `${calendarMonth}-`
+        )
+          ? item.source.event_date
+          : null;
+
+      if (
+        selectedDate &&
+        fallbackDate !== selectedDate
+      ) {
+        return [];
+      }
+
+      return [
+        {
+          ...item.source,
+          occurrence_date: fallbackDate,
+          display_warning: warning,
+        },
+      ];
+    }
+
     return dates
-      .filter((date) => !selectedDate || date === selectedDate)
+      .filter(
+        (date) =>
+          !selectedDate || date === selectedDate
+      )
       .map((date) => ({
         ...item.source,
         occurrence_date: date,
+        display_warning: null,
       }));
   })
-  .sort(
-    (a, b) =>
-      a.occurrence_date.localeCompare(b.occurrence_date) ||
+  .sort((a, b) => {
+    if (!a.occurrence_date) return 1;
+    if (!b.occurrence_date) return -1;
+
+    return (
+      a.occurrence_date.localeCompare(
+        b.occurrence_date
+      ) ||
       a.id - b.id
-  );
+    );
+  });
 
   const fetchMeetings = async () => {
   try {
@@ -709,7 +790,9 @@ const handleDeleteEvent = async (id: number) => {
                   </td>
 
                   <td className="p-4">
-                   {meeting.occurrence_date.replaceAll("-", "/")}
+                   {meeting.occurrence_date
+  ? meeting.occurrence_date.replaceAll("-", "/")
+  : "日付未確定"}
                   </td>
 
                   <td className="p-4">
@@ -717,8 +800,16 @@ const handleDeleteEvent = async (id: number) => {
                   </td>
 
                   <td className="p-4">
-                    {meeting.recurrence_type || "なし"}
-                  </td>
+  <div>
+    {meeting.recurrence_type || "なし"}
+  </div>
+
+  {meeting.display_warning && (
+    <p className="mt-1 text-xs text-amber-700">
+      条件を確認してください
+    </p>
+  )}
+</td>
 
                   <td className="p-4">
                     {meeting.is_active ? "有効" : "無効"}
@@ -788,7 +879,9 @@ const handleDeleteEvent = async (id: number) => {
                   </td>
 
                   <td className="p-4">
-                   {event.occurrence_date.replaceAll("-", "/")}
+                   {event.occurrence_date
+  ? event.occurrence_date.replaceAll("-", "/")
+  : "日付未確定"}
                   </td>
 
                   <td className="p-4">

@@ -84,20 +84,26 @@ useEffect(() => {
           redirect: "error",
           signal: controller.signal,
         }),
-        fetch("/api/staffs", {
-          cache: "no-store",
-          signal: controller.signal,
-        }),
+       fetch("/api/staffs", {
+  headers: {
+    Authorization: `Bearer ${token}`,
+  },
+  cache: "no-store",
+  signal: controller.signal,
+}),
       ]);
 
       if (cancelled) {
         return;
       }
 
-      if (meetingResponse.status === 401) {
-        router.replace("/login");
-        return;
-      }
+      if (
+  meetingResponse.status === 401 ||
+  staffResponse.status === 401
+) {
+  router.replace("/login");
+  return;
+}
 
       const [meetingData, staffData] = await Promise.all([
         meetingResponse.json(),

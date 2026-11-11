@@ -33,19 +33,53 @@ const savingRef = useRef(false);
 
 useEffect(() => {
   const fetchStaffs = async () => {
-    const response = await fetch("/api/staffs");
-    const data = await response.json();
+    try {
+      const { data: sessionData, error: sessionError } =
+        await supabase.auth.getSession();
 
-    if (!response.ok) {
-      alert(data.error ?? "スタッフ一覧の取得に失敗しました");
-      return;
+      if (sessionError) {
+        alert("ログイン状態を確認できません。");
+        return;
+      }
+
+      const token = sessionData.session?.access_token;
+
+      if (!token) {
+        router.push("/login");
+        return;
+      }
+
+      const response = await fetch("/api/staffs", {
+        headers: {
+          Authorization: `Bearer ${token}`,
+        },
+        cache: "no-store",
+      });
+
+      const data = await response.json();
+
+      if (response.status === 401) {
+        router.push("/login");
+        return;
+      }
+
+      if (!response.ok) {
+        alert(
+          data.error ??
+            "スタッフ一覧の取得に失敗しました"
+        );
+        return;
+      }
+
+      setStaffs(Array.isArray(data) ? data : []);
+    } catch {
+      alert("スタッフ一覧の取得に失敗しました。");
     }
-
-    setStaffs(Array.isArray(data) ? data : []);
   };
 
-  fetchStaffs();
-}, []);
+  void fetchStaffs();
+}, [router]);
+
 
   const [form, setForm] = useState<MeetingForm>({
     meeting_name: "",

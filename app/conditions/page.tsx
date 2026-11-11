@@ -55,6 +55,11 @@ export default function ConditionsPage() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [isSaved, setIsSaved] = useState(false);
+  const [savedForm, setSavedForm] =
+  useState<ConditionForm | null>(null);
+const hasUnsavedChanges =
+  savedForm !== null &&
+  JSON.stringify(form) !== JSON.stringify(savedForm);
 
   const fetchCondition = async (
     year: number,
@@ -103,7 +108,7 @@ export default function ConditionsPage() {
         return;
       }
 
-      setForm({
+      const loadedForm: ConditionForm = {
         target_year: Number(data.target_year),
         target_month: Number(data.target_month),
         calculated_public_holidays: Number(
@@ -150,7 +155,10 @@ export default function ConditionsPage() {
 
 balance_weekend_shifts:
   data.balance_weekend_shifts !== false,
-      });
+};
+
+setForm(loadedForm);
+setSavedForm(loadedForm);
 
       setIsSaved(Boolean(data.is_saved));
     } catch {
@@ -168,17 +176,28 @@ balance_weekend_shifts:
   }, []);
 
   const changeTargetMonth = (
-    year: number,
-    month: number
-  ) => {
-    setForm((prev) => ({
-      ...prev,
-      target_year: year,
-      target_month: month,
-    }));
+  year: number,
+  month: number
+) => {
+  if (
+    year === form.target_year &&
+    month === form.target_month
+  ) {
+    return;
+  }
 
-    void fetchCondition(year, month);
-  };
+  if (hasUnsavedChanges) {
+    const discard = window.confirm(
+      "保存していない変更があります。\n\n変更を破棄して別の月へ移動しますか？"
+    );
+
+    if (!discard) {
+      return;
+    }
+  }
+
+  void fetchCondition(year, month);
+};
 
   const handleSave = async () => {
     try {
@@ -223,8 +242,10 @@ balance_weekend_shifts:
         return;
       }
 
-      setIsSaved(true);
-      alert("シフト条件を保存しました！");
+  setIsSaved(true);
+setSavedForm({ ...form });
+
+alert("シフト条件を保存しました！");
     } catch {
       alert("シフト条件の保存中に通信エラーが発生しました。");
     } finally {
@@ -329,19 +350,23 @@ balance_weekend_shifts:
         </div>
 
         <p className="mt-4 text-sm">
-          状態：
-          <span
-            className={
-              isSaved
-                ? "font-medium text-green-700"
-                : "font-medium text-amber-700"
-            }
-          >
-            {isSaved
-              ? "保存済み"
-              : "未保存（初期値を表示中）"}
-          </span>
-        </p>
+  状態：
+  <span
+    className={
+      hasUnsavedChanges
+        ? "font-medium text-red-700"
+        : isSaved
+          ? "font-medium text-green-700"
+          : "font-medium text-amber-700"
+    }
+  >
+    {hasUnsavedChanges
+      ? "未保存の変更あり"
+      : isSaved
+        ? "保存済み"
+        : "未保存（初期値を表示中）"}
+  </span>
+</p>
       </div>
 
       <div className="space-y-8">
@@ -513,13 +538,15 @@ balance_weekend_shifts:
         </section>
 
         <div className="sticky bottom-4 flex justify-end">
-          <PrimaryButton
-            onClick={handleSave}
-            disabled={saving}
-          >
-            {saving
-              ? "保存中..."
-              : "この条件を保存"}
+        <PrimaryButton
+  onClick={handleSave}
+  disabled={saving || !hasUnsavedChanges}
+>
+          {saving
+  ? "保存中..."
+  : hasUnsavedChanges
+    ? "この条件を保存"
+    : "保存済み"}
           </PrimaryButton>
         </div>
       </div>
