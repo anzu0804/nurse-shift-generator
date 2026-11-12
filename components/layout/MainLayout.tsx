@@ -113,7 +113,7 @@ export default function MainLayout({
     <div className="flex">
       <Sidebar />
 
-      <main className="min-h-screen flex-1 bg-gray-100 p-8">
+      <main className="min-h-screen min-w-0 flex-1 bg-gray-100 p-8">
         {children}
       </main>
     </div>
