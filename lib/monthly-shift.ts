@@ -15,6 +15,10 @@ export type MonthlyShift = {
   assignments: MonthlyAssignment[];
 };
 
+export function isMonthlyShiftMonth(month: string) {
+  return /^\d{4}-(0[1-9]|1[0-2])$/.test(month) && Number(month.slice(0, 4)) >= 100;
+}
+
 export function monthDates(month: string) {
   const [year, monthNumber] = month.split("-").map(Number);
   const lastDay = new Date(Date.UTC(year, monthNumber, 0)).getUTCDate();

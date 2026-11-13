@@ -1,6 +1,8 @@
 import { NextResponse } from "next/server";
 import { AuthError, getAuthenticatedSupabase } from "@/lib/authenticated-supabase";
-import { monthDates, type MonthlyAssignment, type MonthlyShift } from "@/lib/monthly-shift";
+import { leaveShiftCode, staffDateKey } from "@/lib/fixed-leave";
+import { readMonthlyLeaveRequests, readPages } from "@/lib/monthly-leave-requests";
+import { isMonthlyShiftMonth, monthDates, type MonthlyAssignment, type MonthlyShift } from "@/lib/monthly-shift";
 
 function reply(body: MonthlyShift | { error: string }, status = 200) {
   return NextResponse.json(body, {
@@ -9,37 +11,9 @@ function reply(body: MonthlyShift | { error: string }, status = 200) {
   });
 }
 
-async function readPages<T>(
-  readPage: (from: number, to: number) => PromiseLike<{
-    data: T[] | null;
-    count: number | null;
-    error: { code: string } | null;
-  }>,
-) {
-  const rows: T[] = [];
-  const pageSize = 500;
-
-  while (true) {
-    const { data, count, error } = await readPage(rows.length, rows.length + pageSize - 1);
-    if (error) throw error;
-    if (!data || count === null) throw new Error("Missing page result");
-    rows.push(...data);
-    if (rows.length >= count) return rows;
-    if (data.length === 0) throw new Error("Incomplete page result");
-  }
-}
-
-const leaveCodes: Record<string, string> = {
-  有給: "有",
-  生理休暇: "生",
-  夏休み: "公",
-  誕生日: "公",
-  誕生日休暇: "公",
-};
-
 export async function GET(request: Request) {
   const month = new URL(request.url).searchParams.get("month") ?? "";
-  if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(month) || Number(month.slice(0, 4)) < 100) {
+  if (!isMonthlyShiftMonth(month)) {
     return reply({ error: "対象年月をYYYY-MM形式で指定してください。" }, 400);
   }
 
@@ -78,18 +52,9 @@ export async function GET(request: Request) {
 
     if (assignments.length === 0) return reply({ sheet, assignments: [] });
 
-    const leaves = await readPages((from, to) => supabase
-      .from("leave_requests")
-      .select("staff_id, leave_date, leave_type", { count: "exact" })
-      .in("status", ["申請済み", "確定"])
-      .gte("leave_date", firstDate)
-      .lte("leave_date", lastDate)
-      .order("id")
-      .range(from, to)
-      .abortSignal(request.signal),
-    );
+    const leaves = await readMonthlyLeaveRequests(supabase, firstDate, lastDate, request.signal);
     const leavesByCell = new Map(
-      leaves.map((leave) => [leave.staff_id + "/" + leave.leave_date, leaveCodes[leave.leave_type]]),
+      leaves.map((leave) => [staffDateKey(leave.staff_id, leave.leave_date), leaveShiftCode(leave.leave_type)]),
     );
 
     return reply({
@@ -97,7 +62,7 @@ export async function GET(request: Request) {
       assignments: assignments.map((assignment) => ({
         ...assignment,
         requestedLeave:
-          leavesByCell.get(assignment.staff_id + "/" + assignment.work_date) === assignment.shift_code,
+          leavesByCell.get(staffDateKey(assignment.staff_id, assignment.work_date)) === assignment.shift_code,
       })),
     });
   } catch (error) {
