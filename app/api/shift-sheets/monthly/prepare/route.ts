@@ -4,6 +4,7 @@ import { assignDayShifts, getConsecutiveWorkWarnings, isDayShiftStaff } from "@/
 import { FixedLeaveValidationError, prepareFixedLeaves } from "@/lib/fixed-leave";
 import { readMonthlyLeaveRequests, readPages } from "@/lib/monthly-leave-requests";
 import { isMonthlyShiftMonth, monthDates } from "@/lib/monthly-shift";
+import { getNgPairViolations, indexNgPairs } from "@/lib/ng-pairs";
 import { offsetShiftDate } from "@/lib/night-after";
 import { assignNightShifts, isNightShiftStaff } from "@/lib/night-shift";
 import { monthlyGenerationChecks, shiftValidationError, type ShiftValidationResult } from "@/lib/shift-validation";
@@ -138,7 +139,7 @@ export async function POST(request: Request) {
     }
 
     const nextDate = nightShiftNextDayAfter ? offsetShiftDate(lastDate, 1) : undefined;
-    const [leaveRequests, staffs, currentAssignments, previousAssignments, nextAssignments] = await Promise.all([
+    const [leaveRequests, staffs, currentAssignments, previousAssignments, nextAssignments, ngPairs] = await Promise.all([
       readMonthlyLeaveRequests(supabase, firstDate, nextDate ?? lastDate, request.signal),
       nightStaffCount > 0 || needsDayStaff || balanceWeekendShifts ? readPages((from, to) => supabase
         .from("staffs")
@@ -151,7 +152,15 @@ export async function POST(request: Request) {
       readAssignments(firstDate, lastDate),
       readAdjacentAssignments(firstDate, -1),
       readAdjacentAssignments(lastDate, 1),
+      readPages((from, to) => supabase
+        .from("ng_pairs")
+        .select("staff_a_id, staff_b_id, is_active", { count: "exact" })
+        .eq("is_active", true)
+        .order("id")
+        .range(from, to)
+        .abortSignal(request.signal)),
     ]);
+    const ngPairPartners = indexNgPairs(ngPairs);
     const { fixedCells } = prepareFixedLeaves(nextDate ? [...dates, { date: nextDate }] : dates, leaveRequests);
     const existingAssignments = [...previousAssignments, ...currentAssignments, ...nextAssignments];
     const { assignments, shortages, nightAfterFixedCells, nightAfterConflicts, nightLimitWarnings } = assignNightShifts({
@@ -163,6 +172,7 @@ export async function POST(request: Request) {
       nightStaffCount,
       nightShiftNextDayAfter,
       weekends,
+      ngPairPartners,
     });
     const lockedCells = [...fixedCells, ...assignments, ...nightAfterFixedCells];
     const { assignments: dayAssignments, shortages: dayShortages, teamShortages: dayTeamShortages } = assignDayShifts({
@@ -173,6 +183,7 @@ export async function POST(request: Request) {
       requirements: dayRequirements,
       maxConsecutiveWorkDays,
       balanceWeekendShifts,
+      ngPairPartners,
     });
     const weekendWarnings = weekends ? getWeekendImbalance(
       staffs.filter((staff) => isDayShiftStaff(staff) || isNightShiftStaff(staff)).map(({ id }) => id),
@@ -192,7 +203,8 @@ export async function POST(request: Request) {
       dayTeamShortages,
       warnings: [...nightLimitWarnings, ...consecutiveWorkWarnings, ...weekendWarnings],
     };
-    return reply({ ...prepared, validationResults: monthlyGenerationChecks(prepared) });
+    const ngPairViolations = getNgPairViolations(currentAssignments, ngPairPartners);
+    return reply({ ...prepared, validationResults: monthlyGenerationChecks({ ...prepared, ngPairViolations }) });
   } catch (error) {
     if (error instanceof AuthError) {
       return errorReply(shiftValidationError("AUTH_ERROR", error.message), error.status);

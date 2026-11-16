@@ -1,4 +1,5 @@
 import { staffDateKey } from "./fixed-leave.ts";
+import { hasNgPairConflict, isNgPairDayShift, type NgPairPartners } from "./ng-pairs.ts";
 import { offsetShiftDate } from "./night-after.ts";
 import { DAY_SHIFT_CODE, dayShiftCodes, isWorkShift, type ShiftCell as WorkCell } from "./shift-work.ts";
 import { countWeekendWork, weekendDates } from "./weekend-shift.ts";
@@ -108,21 +109,31 @@ function selectDayShiftCandidates(
   candidates: readonly DayShiftStaff[],
   availableSlots: number,
   teamNeeds: TeamCounts,
+  conflictsWithAssignment: (staffId: number, selectedIds: ReadonlySet<number>) => boolean,
 ) {
   const remaining = { ...teamNeeds };
   const selected: DayShiftStaff[] = [];
+  const selectedIds = new Set<number>();
   const otherCandidates: DayShiftStaff[] = [];
   for (const staff of candidates) {
     if (selected.length === availableSlots) break;
     const team = getDayShiftTeam(staff.team);
     if (team && remaining[team] > 0) {
+      if (conflictsWithAssignment(staff.id, selectedIds)) continue;
       selected.push(staff);
+      selectedIds.add(staff.id);
       remaining[team] -= 1;
     } else {
       otherCandidates.push(staff);
     }
   }
-  return [...selected, ...otherCandidates.slice(0, availableSlots - selected.length)];
+  for (const staff of otherCandidates) {
+    if (selected.length === availableSlots) break;
+    if (conflictsWithAssignment(staff.id, selectedIds)) continue;
+    selected.push(staff);
+    selectedIds.add(staff.id);
+  }
+  return selected;
 }
 
 export function assignDayShifts({
@@ -133,6 +144,7 @@ export function assignDayShifts({
   requirements,
   maxConsecutiveWorkDays,
   balanceWeekendShifts = false,
+  ngPairPartners = new Map(),
 }: {
   dates: readonly { date: string; weekday: number }[];
   staffs: readonly DayShiftStaff[];
@@ -141,6 +153,7 @@ export function assignDayShifts({
   requirements: DayShiftRequirements;
   maxConsecutiveWorkDays: number;
   balanceWeekendShifts?: boolean;
+  ngPairPartners?: NgPairPartners;
 }) {
   const cells = new Map<string, ShiftCell>();
   for (const cell of [...existingAssignments, ...fixedCells]) {
@@ -191,7 +204,9 @@ export function assignDayShifts({
     const selected = selectDayShiftCandidates(candidates, needed, {
       A: minimumPerTeam - teamCounts.A,
       B: minimumPerTeam - teamCounts.B,
-    });
+    }, (staffId, selectedIds) => hasNgPairConflict(ngPairPartners, staffId, (partner) =>
+      selectedIds.has(partner) || isNgPairDayShift(cells.get(staffDateKey(partner, date))?.shift_code),
+    ));
     for (const { id, team } of selected) {
       const assignment = { staff_id: id, work_date: date, shift_code: DAY_SHIFT_CODE };
       cells.set(staffDateKey(id, date), assignment);

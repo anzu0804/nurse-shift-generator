@@ -1,5 +1,6 @@
 import { staffDateKey } from "./fixed-leave.ts";
 
+import { hasNgPairConflict, type NgPairPartners } from "./ng-pairs.ts";
 import { checkNightAfter, NIGHT_AFTER_CODE, offsetShiftDate } from "./night-after.ts";
 
 import { NIGHT_SHIFT_CODE, type ShiftCell } from "./shift-work.ts";
@@ -48,6 +49,7 @@ export function assignNightShifts({
   nightStaffCount,
   nightShiftNextDayAfter = false,
   weekends = new Set<string>(),
+  ngPairPartners = new Map(),
 }: {
   dates: readonly { date: string }[];
   staffs: readonly NightShiftStaff[];
@@ -57,6 +59,7 @@ export function assignNightShifts({
   nightStaffCount: number;
   nightShiftNextDayAfter?: boolean;
   weekends?: ReadonlySet<string>;
+  ngPairPartners?: NgPairPartners;
 }) {
   const month = new Set(dates.map(({ date }) => date).sort());
   const firstDate = month.values().next().value;
@@ -119,7 +122,9 @@ export function assignNightShifts({
     const candidates = getNightShiftCandidates(staffs, date, occupied, nightCounts, nightShiftLimit, balanceToday);
     for (const { id } of candidates) {
       const key = staffDateKey(id, date);
-      if (occupied.has(key)) continue;
+      if (occupied.has(key) || hasNgPairConflict(ngPairPartners, id, (partner) =>
+        shiftCodes.get(staffDateKey(partner, date)) === NIGHT_SHIFT_CODE,
+      )) continue;
 
       const nightAfter = nightShiftNextDayAfter ? checkNightAfter(id, date, shiftCodes) : undefined;
       if (nightAfter?.kind === "conflict" || nightAfter?.kind === "outside-calendar") continue;

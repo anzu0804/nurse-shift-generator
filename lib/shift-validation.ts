@@ -1,4 +1,5 @@
 import type { assignDayShifts, getConsecutiveWorkWarnings } from "./day-shift.ts";
+import type { NgPairViolation } from "./ng-pairs.ts";
 import type { assignNightShifts } from "./night-shift.ts";
 import type { getWeekendImbalance } from "./weekend-shift.ts";
 
@@ -7,6 +8,7 @@ export type ShiftValidationResult = {
   validation_code: string;
   message: string;
   staff_id?: number;
+  related_staff_id?: number;
   work_date?: string;
 };
 
@@ -15,6 +17,7 @@ type GenerationChecks = {
   nightAfterConflicts: ReturnType<typeof assignNightShifts>["nightAfterConflicts"];
   dayShortages: ReturnType<typeof assignDayShifts>["shortages"];
   dayTeamShortages: ReturnType<typeof assignDayShifts>["teamShortages"];
+  ngPairViolations?: readonly NgPairViolation[];
   warnings: (
     ReturnType<typeof assignNightShifts>["nightLimitWarnings"][number] |
     ReturnType<typeof getConsecutiveWorkWarnings>[number] |
@@ -25,7 +28,7 @@ type GenerationChecks = {
 export function shiftValidationError(
   validation_code: string,
   message: string,
-  location: Pick<ShiftValidationResult, "staff_id" | "work_date"> = {},
+  location: Pick<ShiftValidationResult, "staff_id" | "related_staff_id" | "work_date"> = {},
 ): ShiftValidationResult {
   return { severity: "error", validation_code, message, ...location };
 }
@@ -45,6 +48,11 @@ export function monthlyGenerationChecks(checks: GenerationChecks): ShiftValidati
       shiftValidationError(code,
         `${night_date}の夜勤の翌日に「${conflicting_shift_code}」が入っているため、夜勤明け（明）を配置できません。`,
         { staff_id, work_date },
+      ),
+    ),
+    ...(checks.ngPairViolations ?? []).map(({ work_date, shift, staff_a_id, staff_b_id }) =>
+      shiftValidationError("E003", `${shift}にNGペアのスタッフ #${staff_a_id} と #${staff_b_id} が配置されています。`,
+        { work_date, staff_id: staff_a_id, related_staff_id: staff_b_id },
       ),
     ),
     ...checks.warnings.map((warning): ShiftValidationResult => {
