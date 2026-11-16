@@ -1,11 +1,12 @@
 import { NextResponse } from "next/server";
 import { AuthError, getAuthenticatedSupabase } from "@/lib/authenticated-supabase";
-import { assignDayShifts } from "@/lib/day-shift";
+import { assignDayShifts, isDayShiftStaff } from "@/lib/day-shift";
 import { FixedLeaveValidationError, prepareFixedLeaves } from "@/lib/fixed-leave";
 import { readMonthlyLeaveRequests, readPages } from "@/lib/monthly-leave-requests";
 import { isMonthlyShiftMonth, monthDates } from "@/lib/monthly-shift";
 import { offsetShiftDate } from "@/lib/night-after";
-import { assignNightShifts } from "@/lib/night-shift";
+import { assignNightShifts, isNightShiftStaff } from "@/lib/night-shift";
+import { countWeekendWork, getWeekendImbalance, weekendDates } from "@/lib/weekend-shift";
 
 type PreparedShift = {
   fixedCells: ReturnType<typeof prepareFixedLeaves>["fixedCells"];
@@ -15,6 +16,10 @@ type PreparedShift = {
   nightAfterConflicts: ReturnType<typeof assignNightShifts>["nightAfterConflicts"];
   dayAssignments: ReturnType<typeof assignDayShifts>["assignments"];
   dayShortages: ReturnType<typeof assignDayShifts>["shortages"];
+  warnings: (
+    ReturnType<typeof assignNightShifts>["nightLimitWarnings"][number] |
+    ReturnType<typeof getWeekendImbalance>[number]
+  )[];
   dayTeamShortages: ReturnType<typeof assignDayShifts>["teamShortages"];
 };
 
@@ -39,7 +44,7 @@ export async function POST(request: Request) {
     const [year, monthNumber] = month.split("-").map(Number);
     const { data: conditions, error: conditionsError } = await supabase
       .from("shift_conditions")
-      .select("default_night_shift_limit, night_staff_count, night_shift_next_day_after, weekday_day_staff_count, saturday_day_staff_count, sunday_day_staff_count, max_consecutive_work_days")
+      .select("default_night_shift_limit, night_staff_count, night_shift_next_day_after, weekday_day_staff_count, saturday_day_staff_count, sunday_day_staff_count, max_consecutive_work_days, balance_weekend_shifts")
       .eq("target_year", year)
       .eq("target_month", monthNumber)
       .abortSignal(request.signal)
@@ -48,6 +53,8 @@ export async function POST(request: Request) {
 
     // Match the conditions screen defaults for a month with no saved settings.
     const nightShiftLimit = conditions?.default_night_shift_limit ?? 4;
+    const balanceWeekendShifts = conditions?.balance_weekend_shifts ?? true;
+    const weekends = balanceWeekendShifts ? weekendDates(dates) : undefined;
     const nightStaffCount = conditions?.night_staff_count ?? 0;
     const nightShiftNextDayAfter = conditions?.night_shift_next_day_after ?? true;
     if (![nightShiftLimit, nightStaffCount].every((value) => Number.isInteger(value) && value >= 0)) {
@@ -122,7 +129,7 @@ export async function POST(request: Request) {
     const nextDate = nightShiftNextDayAfter ? offsetShiftDate(lastDate, 1) : undefined;
     const [leaveRequests, staffs, currentAssignments, previousAssignments, nextAssignments] = await Promise.all([
       readMonthlyLeaveRequests(supabase, firstDate, nextDate ?? lastDate, request.signal),
-      nightStaffCount > 0 || needsDayStaff ? readPages((from, to) => supabase
+      nightStaffCount > 0 || needsDayStaff || balanceWeekendShifts ? readPages((from, to) => supabase
         .from("staffs")
         .select("id, employment_status, is_active, can_night_shift, job_type, display_order, team", { count: "exact" })
         .eq("employment_status", "在籍中")
@@ -130,13 +137,13 @@ export async function POST(request: Request) {
         .order("id")
         .range(from, to)
         .abortSignal(request.signal)) : [],
-      nightShiftNextDayAfter || nightStaffCount > 0 || needsDayStaff ? readAssignments(firstDate, lastDate) : [],
+      readAssignments(firstDate, lastDate),
       readAdjacentAssignments(firstDate, -1),
       readAdjacentAssignments(lastDate, 1),
     ]);
     const { fixedCells } = prepareFixedLeaves(nextDate ? [...dates, { date: nextDate }] : dates, leaveRequests);
     const existingAssignments = [...previousAssignments, ...currentAssignments, ...nextAssignments];
-    const { assignments, shortages, nightAfterFixedCells, nightAfterConflicts } = assignNightShifts({
+    const { assignments, shortages, nightAfterFixedCells, nightAfterConflicts, nightLimitWarnings } = assignNightShifts({
       dates,
       staffs,
       fixedCells,
@@ -144,15 +151,22 @@ export async function POST(request: Request) {
       nightShiftLimit,
       nightStaffCount,
       nightShiftNextDayAfter,
+      weekends,
     });
+    const lockedCells = [...fixedCells, ...assignments, ...nightAfterFixedCells];
     const { assignments: dayAssignments, shortages: dayShortages, teamShortages: dayTeamShortages } = assignDayShifts({
       dates,
       staffs,
       existingAssignments,
-      fixedCells: [...fixedCells, ...assignments, ...nightAfterFixedCells],
+      fixedCells: lockedCells,
       requirements: dayRequirements,
       maxConsecutiveWorkDays,
+      balanceWeekendShifts,
     });
+    const weekendWarnings = weekends ? getWeekendImbalance(
+      staffs.filter((staff) => isDayShiftStaff(staff) || isNightShiftStaff(staff)).map(({ id }) => id),
+      countWeekendWork(weekends, currentAssignments, lockedCells, dayAssignments),
+    ) : [];
     return reply({
       fixedCells: fixedCells.filter(({ work_date }) => work_date !== nextDate),
       nightAssignments: assignments,
@@ -162,6 +176,7 @@ export async function POST(request: Request) {
       dayAssignments,
       dayShortages,
       dayTeamShortages,
+      warnings: [...nightLimitWarnings, ...weekendWarnings],
     });
   } catch (error) {
     if (error instanceof AuthError) return reply({ error: error.message }, error.status);

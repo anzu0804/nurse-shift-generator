@@ -172,3 +172,18 @@ test("leaves a single slot open to either team and reports only an overall short
   assert.deepEqual(result.shortages, [{ work_date: sunday, missing_count: 1 }]);
   assert.deepEqual(result.teamShortages, []);
 });
+
+test("prefers fewer weekend shifts without displacing the other team's required slot", () => {
+  const options = {
+    dates,
+    staffs: [staff(1, { team: "A" }), staff(2, { team: "A" }), staff(3, { team: "B" })],
+    existingAssignments: [cell(1, dates[6].date, "D"), cell(2, monday, "A")],
+    requirements: { weekday: 0, saturday: 0, sunday: 2 },
+  };
+  assert.deepEqual(prepare({ ...options, balanceWeekendShifts: false }).assignments.slice(0, 2).map(({ staff_id }) => staff_id).sort(), [
+    1, 3,
+  ]);
+  const balanced = prepare({ ...options, balanceWeekendShifts: true });
+  assert.deepEqual(balanced.assignments.slice(0, 2).map(({ staff_id }) => staff_id).sort(), [2, 3]);
+  assert.deepEqual(balanced.teamShortages, []);
+});

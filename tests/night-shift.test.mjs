@@ -58,6 +58,7 @@ test("申請済みと確定の希望休を避け、取消の日は割り当て�
   assert.deepEqual(assign({ staffs: [staff(1)], fixedCells }), {
     assignments: [cell(1, third)],
     nightAfterFixedCells: [],
+    nightLimitWarnings: [],
     nightAfterConflicts: [],
     shortages: [
       { work_date: first, missing_count: 1 },
@@ -76,6 +77,7 @@ test("既存セルを保護し、対象月の既存夜勤を日別人数と月�
   assert.deepEqual(assign({ existingAssignments, nightShiftLimit: 1 }), {
     assignments: [cell(3, first), cell(2, third)],
     nightAfterFixedCells: [],
+    nightLimitWarnings: [],
     nightAfterConflicts: [],
     shortages: [],
   });
@@ -90,6 +92,7 @@ test("夜勤回数が少ない候補を優先し、同日重複と人数超過�
       cell(2, third), cell(3, third),
     ],
     nightAfterFixedCells: [],
+    nightLimitWarnings: [],
     nightAfterConflicts: [],
     shortages: [],
   });
@@ -97,11 +100,12 @@ test("夜勤回数が少ない候補を優先し、同日重複と人数超過�
 
 test("必要人数0なら追加せず、上限0なら不足を返す", () => {
   assert.deepEqual(assign({ nightStaffCount: 0 }), {
-    assignments: [], shortages: [], nightAfterFixedCells: [], nightAfterConflicts: [],
+    assignments: [], shortages: [], nightAfterFixedCells: [], nightAfterConflicts: [], nightLimitWarnings: [],
   });
   assert.deepEqual(assign({ nightShiftLimit: 0, nightStaffCount: 2 }), {
     assignments: [],
     nightAfterFixedCells: [],
+    nightLimitWarnings: [],
     nightAfterConflicts: [],
     shortages: dates.map(({ date }) => ({ work_date: date, missing_count: 2 })),
   });
@@ -177,4 +181,35 @@ test("年をまたぐ既存割当を保護し、設定がfalseなら明け固定
   const disabled = assign({ ...options, nightShiftNextDayAfter: false });
   assert.deepEqual(disabled.nightAfterFixedCells, []);
   assert.deepEqual(disabled.nightAfterConflicts, []);
+});
+
+test("保存済み夜勤の超過はW001を返し、対象月外と重複行を除いて追加夜勤を制限する", () => {
+  const result = assign({
+    staffs: [staff(1), staff(2)],
+    existingAssignments: [cell(1, first), cell(1, first), cell(1, second), cell(2, "2028-01-31")],
+    nightShiftLimit: 1,
+    nightStaffCount: 2,
+  });
+  assert.deepEqual(result.nightLimitWarnings, [{ code: "W001", staff_id: 1, count: 2, limit: 1 }]);
+  assert.deepEqual(result.assignments, [cell(2, first)]);
+  assert.deepEqual(result.shortages, [
+    { work_date: second, missing_count: 1 },
+    { work_date: third, missing_count: 2 },
+  ]);
+  assert.deepEqual(assign({
+    existingAssignments: [cell(1, first)],
+    nightShiftLimit: 0,
+    nightStaffCount: 0,
+  }).nightLimitWarnings, [{ code: "W001", staff_id: 1, count: 1, limit: 0 }]);
+});
+
+test("土日の夜勤で回数が同じ候補は、設定有効時に土日勤務が少ない候補を優先する", () => {
+  const sunday = "2026-11-01";
+  const options = {
+    dates: [{ date: sunday }, { date: "2026-11-07" }],
+    staffs: [staff(1), staff(2)],
+    existingAssignments: [cell(1, "2026-11-07", "A")],
+  };
+  assert.deepEqual(assign(options).assignments[0], cell(1, sunday));
+  assert.deepEqual(assign({ ...options, weekends: new Set([sunday, "2026-11-07"]) }).assignments[0], cell(2, sunday));
 });

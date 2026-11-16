@@ -1,5 +1,7 @@
 import { staffDateKey } from "./fixed-leave.ts";
 import { offsetShiftDate } from "./night-after.ts";
+import { DAY_SHIFT_CODE, dayShiftCodes, isWorkShift, type ShiftCell as WorkCell } from "./shift-work.ts";
+import { countWeekendWork, weekendDates } from "./weekend-shift.ts";
 
 type DayShiftStaff = {
   id: number;
@@ -10,13 +12,7 @@ type DayShiftStaff = {
   team?: string | null;
 };
 
-type ShiftCell = {
-  staff_id: number;
-  work_date: string;
-  shift_code: string;
-  work_amount?: number;
-  team_assignment?: string | null;
-};
+type ShiftCell = WorkCell & { team_assignment?: string | null };
 
 type DayShiftRequirements = {
   weekday: number;
@@ -24,9 +20,6 @@ type DayShiftRequirements = {
   sunday: number;
 };
 
-const DAY_SHIFT_CODE = "A";
-const dayShiftCodes = new Set([DAY_SHIFT_CODE, "A/S", "A/カ", "A/ケ", "A/コ", "A/管"]);
-const workShiftCodes = new Set([...dayShiftCodes, "D", "JA", "JO"]);
 const dayShiftTeams = ["A", "B"] as const;
 type DayShiftTeam = (typeof dayShiftTeams)[number];
 type TeamCounts = Record<DayShiftTeam, number>;
@@ -35,14 +28,7 @@ function getDayShiftTeam(team: string | null | undefined): DayShiftTeam | undefi
   if (team === "A" || team === "B") return team;
 }
 
-function isWorkShift(cell: ShiftCell | undefined) {
-  return cell !== undefined && (
-    workShiftCodes.has(cell.shift_code) ||
-    (cell.shift_code === "研修" && (cell.work_amount ?? 0) > 0)
-  );
-}
-
-function isDayShiftStaff(staff: DayShiftStaff) {
+export function isDayShiftStaff(staff: DayShiftStaff) {
   return staff.is_active && staff.employment_status === "在籍中" &&
     (staff.job_type === "正看護師" || staff.job_type === "補助看護師");
 }
@@ -113,6 +99,7 @@ export function assignDayShifts({
   fixedCells,
   requirements,
   maxConsecutiveWorkDays,
+  balanceWeekendShifts = false,
 }: {
   dates: readonly { date: string; weekday: number }[];
   staffs: readonly DayShiftStaff[];
@@ -120,6 +107,7 @@ export function assignDayShifts({
   fixedCells: readonly ShiftCell[];
   requirements: DayShiftRequirements;
   maxConsecutiveWorkDays: number;
+  balanceWeekendShifts?: boolean;
 }) {
   const cells = new Map<string, ShiftCell>();
   for (const cell of [...existingAssignments, ...fixedCells]) {
@@ -128,6 +116,8 @@ export function assignDayShifts({
 
   const staffById = new Map(staffs.filter(isDayShiftStaff).map((staff) => [staff.id, staff]));
   const eligibleStaff = [...staffById.values()];
+  const weekends = balanceWeekendShifts ? weekendDates(dates) : new Set<string>();
+  const weekendCounts = balanceWeekendShifts ? countWeekendWork(weekends, existingAssignments, fixedCells) : new Map<number, number>();
   const month = new Set(dates.map(({ date }) => date));
   const workCounts = new Map<number, number>();
   for (const cell of cells.values()) {
@@ -157,8 +147,10 @@ export function assignDayShifts({
     // The saved count is shared by both teams. An odd slot is open to either team.
     const minimumPerTeam = Math.floor(required / 2);
     const needed = Math.max(0, required - existingDayStaff);
+    const balanceToday = weekends.has(date);
     const candidates = needed === 0 ? [] : getDayShiftCandidates(eligibleStaff, date, cells, maxConsecutiveWorkDays)
       .sort((a, b) =>
+        (balanceToday ? (weekendCounts.get(a.id) ?? 0) - (weekendCounts.get(b.id) ?? 0) : 0) ||
         (workCounts.get(a.id) ?? 0) - (workCounts.get(b.id) ?? 0) ||
         (a.display_order ?? 0) - (b.display_order ?? 0) ||
         a.id - b.id,
@@ -172,6 +164,7 @@ export function assignDayShifts({
       cells.set(staffDateKey(id, date), assignment);
       assignments.push(assignment);
       workCounts.set(id, (workCounts.get(id) ?? 0) + 1);
+      if (balanceToday) weekendCounts.set(id, (weekendCounts.get(id) ?? 0) + 1);
       const assignedTeam = getDayShiftTeam(team);
       if (assignedTeam) teamCounts[assignedTeam] += 1;
     }

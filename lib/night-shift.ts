@@ -2,7 +2,10 @@ import { staffDateKey } from "./fixed-leave.ts";
 
 import { checkNightAfter, NIGHT_AFTER_CODE, offsetShiftDate } from "./night-after.ts";
 
-export const NIGHT_SHIFT_CODE = "D";
+import { NIGHT_SHIFT_CODE, type ShiftCell } from "./shift-work.ts";
+import { countWeekendWork } from "./weekend-shift.ts";
+
+export { NIGHT_SHIFT_CODE } from "./shift-work.ts";
 
 export type NightShiftStaff = {
   id: number;
@@ -12,11 +15,9 @@ export type NightShiftStaff = {
   display_order: number | null;
 };
 
-type ShiftCell = {
-  staff_id: number;
-  work_date: string;
-  shift_code: string;
-};
+export function isNightShiftStaff(staff: NightShiftStaff) {
+  return staff.employment_status === "在籍中" && staff.is_active === true && staff.can_night_shift === true;
+}
 
 export function getNightShiftCandidates(
   staffs: readonly NightShiftStaff[],
@@ -24,15 +25,15 @@ export function getNightShiftCandidates(
   occupied: ReadonlySet<string>,
   nightCounts: ReadonlyMap<number, number>,
   nightShiftLimit: number,
+  weekendCounts?: ReadonlyMap<number, number>,
 ) {
   return staffs.filter((staff) =>
-    staff.employment_status === "在籍中" &&
-    staff.is_active === true &&
-    staff.can_night_shift === true &&
+    isNightShiftStaff(staff) &&
     !occupied.has(staffDateKey(staff.id, date)) &&
     (nightCounts.get(staff.id) ?? 0) < nightShiftLimit,
   ).sort((a, b) =>
     (nightCounts.get(a.id) ?? 0) - (nightCounts.get(b.id) ?? 0) ||
+    ((weekendCounts?.get(a.id) ?? 0) - (weekendCounts?.get(b.id) ?? 0)) ||
     (a.display_order ?? 0) - (b.display_order ?? 0) ||
     a.id - b.id,
   );
@@ -46,6 +47,7 @@ export function assignNightShifts({
   nightShiftLimit,
   nightStaffCount,
   nightShiftNextDayAfter = false,
+  weekends = new Set<string>(),
 }: {
   dates: readonly { date: string }[];
   staffs: readonly NightShiftStaff[];
@@ -54,6 +56,7 @@ export function assignNightShifts({
   nightShiftLimit: number;
   nightStaffCount: number;
   nightShiftNextDayAfter?: boolean;
+  weekends?: ReadonlySet<string>;
 }) {
   const month = new Set(dates.map(({ date }) => date).sort());
   const firstDate = month.values().next().value;
@@ -104,13 +107,15 @@ export function assignNightShifts({
     }
   }
 
+  const weekendCounts = weekends.size > 0 ? countWeekendWork(weekends, existingAssignments, fixedCells, nightAfterFixedCells) : undefined;
   const assignments: ShiftCell[] = [];
   const shortages: { work_date: string; missing_count: number }[] = [];
   for (const date of month) {
     let missingCount = nightStaffCount - (assignedByDate.get(date) ?? 0);
     if (missingCount <= 0) continue;
 
-    const candidates = getNightShiftCandidates(staffs, date, occupied, nightCounts, nightShiftLimit);
+    const balanceToday = weekends.has(date) ? weekendCounts : undefined;
+    const candidates = getNightShiftCandidates(staffs, date, occupied, nightCounts, nightShiftLimit, balanceToday);
     for (const { id } of candidates) {
       const key = staffDateKey(id, date);
       if (occupied.has(key)) continue;
@@ -122,6 +127,7 @@ export function assignNightShifts({
       shiftCodes.set(key, NIGHT_SHIFT_CODE);
       if (nightAfter) fixNightAfter(nightAfter);
       nightCounts.set(id, (nightCounts.get(id) ?? 0) + 1);
+      if (balanceToday) balanceToday.set(id, (balanceToday.get(id) ?? 0) + 1);
       assignments.push({ staff_id: id, work_date: date, shift_code: NIGHT_SHIFT_CODE });
       missingCount -= 1;
       if (missingCount === 0) break;
@@ -130,5 +136,9 @@ export function assignNightShifts({
     if (missingCount > 0) shortages.push({ work_date: date, missing_count: missingCount });
   }
 
-  return { assignments, shortages, nightAfterFixedCells, nightAfterConflicts };
+  const nightLimitWarnings = [...nightCounts]
+    .filter(([, count]) => count > nightShiftLimit)
+    .map(([staff_id, count]) => ({ code: "W001" as const, staff_id, count, limit: nightShiftLimit }));
+
+  return { assignments, shortages, nightAfterFixedCells, nightAfterConflicts, nightLimitWarnings };
 }
