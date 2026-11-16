@@ -30,7 +30,20 @@ export function staffDateKey(staffId: number, date: string) {
   return staffId + "/" + date;
 }
 
-export class FixedLeaveValidationError extends Error {}
+export class FixedLeaveValidationError extends Error {
+  readonly validationCode: string;
+  readonly staffId: number;
+  readonly workDate: string;
+  readonly issueMessage: string;
+
+  constructor(message: string, validationCode: string, staffId: number, workDate: string) {
+    super(`${message} ${workDate}（スタッフID ${staffId}）`);
+    this.validationCode = validationCode;
+    this.staffId = staffId;
+    this.workDate = workDate;
+    this.issueMessage = message;
+  }
+}
 
 export function prepareFixedLeaves(
   dates: readonly { date: string }[],
@@ -43,21 +56,21 @@ export function prepareFixedLeaves(
     if (!ACTIVE_LEAVE_STATUSES.some((status) => status === leave.status)) continue;
 
     const { staff_id, leave_date, leave_type } = leave;
-    const location = `${leave_date}（スタッフID ${staff_id}）`;
     if (!month.has(leave_date)) {
-      throw new FixedLeaveValidationError(`対象月外の希望休があります。 ${location}`);
+      throw new FixedLeaveValidationError("対象月外の希望休があります。", "LEAVE_OUTSIDE_MONTH", staff_id, leave_date);
     }
 
     const key = staffDateKey(staff_id, leave_date);
     if (fixedLeaves.has(key)) {
       throw new FixedLeaveValidationError(
-        `申請済み・確定の希望休が重複しています。希望休を確認してください。 ${location}`,
+        "申請済み・確定の希望休が重複しています。希望休を確認してください。",
+        "LEAVE_DUPLICATE", staff_id, leave_date,
       );
     }
 
     const shiftCode = leaveShiftCode(leave_type);
     if (shiftCode === undefined) {
-      throw new FixedLeaveValidationError(`未対応の休暇種別があります。 ${location}`);
+      throw new FixedLeaveValidationError("未対応の休暇種別があります。", "LEAVE_TYPE_UNSUPPORTED", staff_id, leave_date);
     }
     fixedLeaves.set(key, { staff_id, work_date: leave_date, shift_code: shiftCode, leave_type });
   }

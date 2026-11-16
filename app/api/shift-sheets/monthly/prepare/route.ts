@@ -6,6 +6,7 @@ import { readMonthlyLeaveRequests, readPages } from "@/lib/monthly-leave-request
 import { isMonthlyShiftMonth, monthDates } from "@/lib/monthly-shift";
 import { offsetShiftDate } from "@/lib/night-after";
 import { assignNightShifts, isNightShiftStaff } from "@/lib/night-shift";
+import { monthlyGenerationChecks, shiftValidationError, type ShiftValidationResult } from "@/lib/shift-validation";
 import { countWeekendWork, getWeekendImbalance, weekendDates } from "@/lib/weekend-shift";
 
 type PreparedShift = {
@@ -23,17 +24,24 @@ type PreparedShift = {
   dayTeamShortages: ReturnType<typeof assignDayShifts>["teamShortages"];
 };
 
-function reply(body: PreparedShift | { error: string }, status = 200) {
+function reply(
+  body: (PreparedShift | { error: string }) & { validationResults: ShiftValidationResult[] },
+  status = 200,
+) {
   return NextResponse.json(body, {
     status,
     headers: { "Cache-Control": "private, no-store", Vary: "Authorization" },
   });
 }
 
+function errorReply(issue: ShiftValidationResult, status: number) {
+  return reply({ error: issue.message, validationResults: [issue] }, status);
+}
+
 export async function POST(request: Request) {
   const month = new URL(request.url).searchParams.get("month") ?? "";
   if (!isMonthlyShiftMonth(month)) {
-    return reply({ error: "対象年月をYYYY-MM形式で指定してください。" }, 400);
+    return errorReply(shiftValidationError("INVALID_MONTH", "対象年月をYYYY-MM形式で指定してください。"), 400);
   }
 
   try {
@@ -58,7 +66,7 @@ export async function POST(request: Request) {
     const nightStaffCount = conditions?.night_staff_count ?? 0;
     const nightShiftNextDayAfter = conditions?.night_shift_next_day_after ?? true;
     if (![nightShiftLimit, nightStaffCount].every((value) => Number.isInteger(value) && value >= 0)) {
-      return reply({ error: "夜勤上限と夜勤必要人数に0以上の整数を指定してください。" }, 422);
+      return errorReply(shiftValidationError("INVALID_CONDITIONS", "夜勤上限と夜勤必要人数に0以上の整数を指定してください。"), 422);
     }
 
     const dayRequirements = {
@@ -68,11 +76,11 @@ export async function POST(request: Request) {
     };
     const maxConsecutiveWorkDays = conditions?.max_consecutive_work_days ?? 5;
     if (!Object.values(dayRequirements).every((value) => Number.isInteger(value) && value >= 0)) {
-      return reply({ error: "日勤必要人数に0以上の整数を指定してください。" }, 422);
+      return errorReply(shiftValidationError("INVALID_CONDITIONS", "日勤必要人数に0以上の整数を指定してください。"), 422);
     }
     const needsDayStaff = Object.values(dayRequirements).some((count) => count > 0);
     if (needsDayStaff && (!Number.isInteger(maxConsecutiveWorkDays) || maxConsecutiveWorkDays < 1)) {
-      return reply({ error: "連続勤務上限に1以上の整数を指定してください。" }, 422);
+      return errorReply(shiftValidationError("INVALID_CONDITIONS", "連続勤務上限に1以上の整数を指定してください。"), 422);
     }
 
     async function readAssignments(startDate: string, endDate: string) {
@@ -167,7 +175,7 @@ export async function POST(request: Request) {
       staffs.filter((staff) => isDayShiftStaff(staff) || isNightShiftStaff(staff)).map(({ id }) => id),
       countWeekendWork(weekends, currentAssignments, lockedCells, dayAssignments),
     ) : [];
-    return reply({
+    const prepared: PreparedShift = {
       fixedCells: fixedCells.filter(({ work_date }) => work_date !== nextDate),
       nightAssignments: assignments,
       nightShortages: shortages,
@@ -177,13 +185,22 @@ export async function POST(request: Request) {
       dayShortages,
       dayTeamShortages,
       warnings: [...nightLimitWarnings, ...weekendWarnings],
-    });
+    };
+    return reply({ ...prepared, validationResults: monthlyGenerationChecks(prepared) });
   } catch (error) {
-    if (error instanceof AuthError) return reply({ error: error.message }, error.status);
-    if (error instanceof FixedLeaveValidationError) return reply({ error: error.message }, 422);
-    if (typeof error === "object" && error !== null && "code" in error && error.code === "42501") {
-      return reply({ error: "シフト作成に必要な情報を取得する権限がありません。" }, 403);
+    if (error instanceof AuthError) {
+      return errorReply(shiftValidationError("AUTH_ERROR", error.message), error.status);
     }
-    return reply({ error: "月間シフトの生成準備ができませんでした。" }, 500);
+    if (error instanceof FixedLeaveValidationError) {
+      const issue = shiftValidationError(error.validationCode, error.issueMessage, {
+        staff_id: error.staffId,
+        work_date: error.workDate,
+      });
+      return reply({ error: error.message, validationResults: [issue] }, 422);
+    }
+    if (typeof error === "object" && error !== null && "code" in error && error.code === "42501") {
+      return errorReply(shiftValidationError("ACCESS_DENIED", "シフト作成に必要な情報を取得する権限がありません。"), 403);
+    }
+    return errorReply(shiftValidationError("PREPARATION_FAILED", "月間シフトの生成準備ができませんでした。"), 500);
   }
 }
