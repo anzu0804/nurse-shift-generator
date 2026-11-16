@@ -96,9 +96,10 @@ export function assignNightShifts({
   }
 
   for (const [key, { staff_id, work_date }] of existingNights) {
+    if (fixedKeys.has(key)) continue;
     if (month.has(work_date)) {
       nightCounts.set(staff_id, (nightCounts.get(staff_id) ?? 0) + 1);
-      if (!fixedKeys.has(key) && shiftCodes.get(key) === NIGHT_SHIFT_CODE) {
+      if (shiftCodes.get(key) === NIGHT_SHIFT_CODE) {
         assignedByDate.set(work_date, (assignedByDate.get(work_date) ?? 0) + 1);
       }
     }

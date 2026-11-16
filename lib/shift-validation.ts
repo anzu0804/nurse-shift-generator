@@ -1,4 +1,4 @@
-import type { assignDayShifts } from "./day-shift.ts";
+import type { assignDayShifts, getConsecutiveWorkWarnings } from "./day-shift.ts";
 import type { assignNightShifts } from "./night-shift.ts";
 import type { getWeekendImbalance } from "./weekend-shift.ts";
 
@@ -17,6 +17,7 @@ type GenerationChecks = {
   dayTeamShortages: ReturnType<typeof assignDayShifts>["teamShortages"];
   warnings: (
     ReturnType<typeof assignNightShifts>["nightLimitWarnings"][number] |
+    ReturnType<typeof getConsecutiveWorkWarnings>[number] |
     ReturnType<typeof getWeekendImbalance>[number]
   )[];
 };
@@ -53,6 +54,15 @@ export function monthlyGenerationChecks(checks: GenerationChecks): ShiftValidati
           validation_code: warning.code,
           message: `夜勤が${warning.count}回あり、上限の${warning.limit}回を超えています。`,
           staff_id: warning.staff_id,
+        };
+      }
+      if (warning.code === "W002") {
+        return {
+          severity: "warning",
+          validation_code: warning.code,
+          message: `連続勤務が少なくとも${warning.count}日あり、上限の${warning.limit}日を超えています。`,
+          staff_id: warning.staff_id,
+          work_date: warning.work_date,
         };
       }
       return {

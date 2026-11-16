@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { assignDayShifts, getDayShiftCandidates, requiredDayShiftCount } from "../lib/day-shift.ts";
+import { assignDayShifts, getConsecutiveWorkWarnings, getDayShiftCandidates, requiredDayShiftCount } from "../lib/day-shift.ts";
 import { staffDateKey } from "../lib/fixed-leave.ts";
 import { monthDates } from "../lib/monthly-shift.ts";
 
@@ -186,4 +186,15 @@ test("prefers fewer weekend shifts without displacing the other team's required 
   const balanced = prepare({ ...options, balanceWeekendShifts: true });
   assert.deepEqual(balanced.assignments.slice(0, 2).map(({ staff_id }) => staff_id).sort(), [2, 3]);
   assert.deepEqual(balanced.teamShortages, []);
+});
+
+test("reports over-limit work across the month boundary and applies fixed leave before counting", () => {
+  const saved = [
+    cell(1, "2026-10-31", "D"), cell(1, sunday, "A"), cell(1, monday, "A/コ"),
+    cell(2, "2026-10-31", "D"), cell(2, sunday, "A"), cell(2, monday, "A"),
+    cell(3, "2026-10-29", "A"), cell(3, "2026-10-30", "A"), cell(3, "2026-10-31", "A"),
+  ];
+  assert.deepEqual(getConsecutiveWorkWarnings(dates, [saved, [cell(2, sunday, "有")]], 2), [
+    { code: "W002", staff_id: 1, work_date: sunday, count: 3, limit: 2 },
+  ]);
 });

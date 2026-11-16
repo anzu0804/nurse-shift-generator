@@ -58,6 +58,39 @@ function staysWithinWorkLimit(
   return workDays <= maxConsecutiveWorkDays;
 }
 
+export function getConsecutiveWorkWarnings(
+  dates: readonly { date: string }[],
+  assignmentLayers: readonly (readonly ShiftCell[])[],
+  limit: number,
+) {
+  const cells = new Map<string, ShiftCell>();
+  for (const layer of assignmentLayers) {
+    for (const cell of layer) cells.set(staffDateKey(cell.staff_id, cell.work_date), cell);
+  }
+
+  const month = new Set(dates.map(({ date }) => date));
+  const warnings: { code: "W002"; staff_id: number; work_date: string; count: number; limit: number }[] = [];
+  for (const cell of cells.values()) {
+    if (!isWorkShift(cell)) continue;
+    const { staff_id, work_date } = cell;
+    const previous = offsetShiftDate(work_date, -1);
+    if (previous && isWorkShift(cells.get(staffDateKey(staff_id, previous)))) continue;
+
+    let count = 0;
+    let firstDateInMonth: string | undefined;
+    let date: string | undefined = work_date;
+    while (date && isWorkShift(cells.get(staffDateKey(staff_id, date)))) {
+      count += 1;
+      if (month.has(date)) firstDateInMonth ??= date;
+      date = offsetShiftDate(date, 1);
+    }
+    if (firstDateInMonth && count > limit) {
+      warnings.push({ code: "W002", staff_id, work_date: firstDateInMonth, count, limit });
+    }
+  }
+  return warnings;
+}
+
 export function getDayShiftCandidates(
   staffs: readonly DayShiftStaff[],
   date: string,

@@ -56,7 +56,9 @@ function repairLinksFor(code: string): (keyof typeof repairLinks)[] {
     case "E004": return ["conditions", "staffs", "leaves"];
     case "E007": return ["schedule", "leaves"];
     case "W001":
+    case "W002":
     case "W012": return ["conditions", "schedule"];
+    case "E011":
     case "INVALID_CONDITIONS": return ["conditions"];
     default: return [];
   }

@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { AuthError, getAuthenticatedSupabase } from "@/lib/authenticated-supabase";
-import { assignDayShifts, isDayShiftStaff } from "@/lib/day-shift";
+import { assignDayShifts, getConsecutiveWorkWarnings, isDayShiftStaff } from "@/lib/day-shift";
 import { FixedLeaveValidationError, prepareFixedLeaves } from "@/lib/fixed-leave";
 import { readMonthlyLeaveRequests, readPages } from "@/lib/monthly-leave-requests";
 import { isMonthlyShiftMonth, monthDates } from "@/lib/monthly-shift";
@@ -19,6 +19,7 @@ type PreparedShift = {
   dayShortages: ReturnType<typeof assignDayShifts>["shortages"];
   warnings: (
     ReturnType<typeof assignNightShifts>["nightLimitWarnings"][number] |
+    ReturnType<typeof getConsecutiveWorkWarnings>[number] |
     ReturnType<typeof getWeekendImbalance>[number]
   )[];
   dayTeamShortages: ReturnType<typeof assignDayShifts>["teamShortages"];
@@ -59,27 +60,30 @@ export async function POST(request: Request) {
       .maybeSingle();
     if (conditionsError) throw conditionsError;
 
-    // Match the conditions screen defaults for a month with no saved settings.
-    const nightShiftLimit = conditions?.default_night_shift_limit ?? 4;
-    const balanceWeekendShifts = conditions?.balance_weekend_shifts ?? true;
+    if (!conditions) {
+      return errorReply(shiftValidationError("E011", "対象月のシフト作成条件が未登録です。条件管理で保存してください。"), 422);
+    }
+
+    const nightShiftLimit = conditions.default_night_shift_limit ?? 4;
+    const balanceWeekendShifts = conditions.balance_weekend_shifts ?? true;
     const weekends = balanceWeekendShifts ? weekendDates(dates) : undefined;
-    const nightStaffCount = conditions?.night_staff_count ?? 0;
-    const nightShiftNextDayAfter = conditions?.night_shift_next_day_after ?? true;
+    const nightStaffCount = conditions.night_staff_count ?? 0;
+    const nightShiftNextDayAfter = conditions.night_shift_next_day_after ?? true;
     if (![nightShiftLimit, nightStaffCount].every((value) => Number.isInteger(value) && value >= 0)) {
       return errorReply(shiftValidationError("INVALID_CONDITIONS", "夜勤上限と夜勤必要人数に0以上の整数を指定してください。"), 422);
     }
 
     const dayRequirements = {
-      weekday: conditions?.weekday_day_staff_count ?? 0,
-      saturday: conditions?.saturday_day_staff_count ?? 0,
-      sunday: conditions?.sunday_day_staff_count ?? 0,
+      weekday: conditions.weekday_day_staff_count ?? 0,
+      saturday: conditions.saturday_day_staff_count ?? 0,
+      sunday: conditions.sunday_day_staff_count ?? 0,
     };
-    const maxConsecutiveWorkDays = conditions?.max_consecutive_work_days ?? 5;
+    const maxConsecutiveWorkDays = conditions.max_consecutive_work_days ?? 5;
     if (!Object.values(dayRequirements).every((value) => Number.isInteger(value) && value >= 0)) {
       return errorReply(shiftValidationError("INVALID_CONDITIONS", "日勤必要人数に0以上の整数を指定してください。"), 422);
     }
     const needsDayStaff = Object.values(dayRequirements).some((count) => count > 0);
-    if (needsDayStaff && (!Number.isInteger(maxConsecutiveWorkDays) || maxConsecutiveWorkDays < 1)) {
+    if (!Number.isInteger(maxConsecutiveWorkDays) || maxConsecutiveWorkDays < 1) {
       return errorReply(shiftValidationError("INVALID_CONDITIONS", "連続勤務上限に1以上の整数を指定してください。"), 422);
     }
 
@@ -111,8 +115,7 @@ export async function POST(request: Request) {
     }
 
     async function readAdjacentAssignments(boundary: string, direction: -1 | 1) {
-      const daysForDayShifts = needsDayStaff ? maxConsecutiveWorkDays : 0;
-      let remaining = Math.max(daysForDayShifts, Number(nightShiftNextDayAfter));
+      let remaining = maxConsecutiveWorkDays;
       let edge = offsetShiftDate(boundary, direction);
       const assignments: Awaited<ReturnType<typeof readAssignments>> = [];
 
@@ -175,6 +178,9 @@ export async function POST(request: Request) {
       staffs.filter((staff) => isDayShiftStaff(staff) || isNightShiftStaff(staff)).map(({ id }) => id),
       countWeekendWork(weekends, currentAssignments, lockedCells, dayAssignments),
     ) : [];
+    const consecutiveWorkWarnings = getConsecutiveWorkWarnings(
+      dates, [existingAssignments, lockedCells, dayAssignments], maxConsecutiveWorkDays,
+    );
     const prepared: PreparedShift = {
       fixedCells: fixedCells.filter(({ work_date }) => work_date !== nextDate),
       nightAssignments: assignments,
@@ -184,7 +190,7 @@ export async function POST(request: Request) {
       dayAssignments,
       dayShortages,
       dayTeamShortages,
-      warnings: [...nightLimitWarnings, ...weekendWarnings],
+      warnings: [...nightLimitWarnings, ...consecutiveWorkWarnings, ...weekendWarnings],
     };
     return reply({ ...prepared, validationResults: monthlyGenerationChecks(prepared) });
   } catch (error) {

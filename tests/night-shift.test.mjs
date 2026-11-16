@@ -213,3 +213,15 @@ test("土日の夜勤で回数が同じ候補は、設定有効時に土日勤�
   assert.deepEqual(assign(options).assignments[0], cell(1, sunday));
   assert.deepEqual(assign({ ...options, weekends: new Set([sunday, "2026-11-07"]) }).assignments[0], cell(2, sunday));
 });
+
+test("希望休で置き換わる既存夜勤を夜勤回数や明けの固定に使わない", () => {
+  const result = assign({
+    existingAssignments: [cell(1, first)],
+    fixedCells: [cell(1, first, "有")],
+    nightStaffCount: 0,
+    nightShiftLimit: 0,
+    nightShiftNextDayAfter: true,
+  });
+  assert.deepEqual(result.nightAfterFixedCells, []);
+  assert.deepEqual(result.nightLimitWarnings, []);
+});
