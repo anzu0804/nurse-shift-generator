@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { AuthError, getAuthenticatedSupabase } from "@/lib/authenticated-supabase";
+import { assignDayShifts } from "@/lib/day-shift";
 import { FixedLeaveValidationError, prepareFixedLeaves } from "@/lib/fixed-leave";
 import { readMonthlyLeaveRequests, readPages } from "@/lib/monthly-leave-requests";
 import { isMonthlyShiftMonth, monthDates } from "@/lib/monthly-shift";
@@ -12,6 +13,8 @@ type PreparedShift = {
   nightShortages: ReturnType<typeof assignNightShifts>["shortages"];
   nightAfterFixedCells: ReturnType<typeof assignNightShifts>["nightAfterFixedCells"];
   nightAfterConflicts: ReturnType<typeof assignNightShifts>["nightAfterConflicts"];
+  dayAssignments: ReturnType<typeof assignDayShifts>["assignments"];
+  dayShortages: ReturnType<typeof assignDayShifts>["shortages"];
 };
 
 function reply(body: PreparedShift | { error: string }, status = 200) {
@@ -35,7 +38,7 @@ export async function POST(request: Request) {
     const [year, monthNumber] = month.split("-").map(Number);
     const { data: conditions, error: conditionsError } = await supabase
       .from("shift_conditions")
-      .select("default_night_shift_limit, night_staff_count, night_shift_next_day_after")
+      .select("default_night_shift_limit, night_staff_count, night_shift_next_day_after, weekday_day_staff_count, saturday_day_staff_count, sunday_day_staff_count, max_consecutive_work_days")
       .eq("target_year", year)
       .eq("target_month", monthNumber)
       .abortSignal(request.signal)
@@ -48,6 +51,20 @@ export async function POST(request: Request) {
     const nightShiftNextDayAfter = conditions?.night_shift_next_day_after ?? true;
     if (![nightShiftLimit, nightStaffCount].every((value) => Number.isInteger(value) && value >= 0)) {
       return reply({ error: "夜勤上限と夜勤必要人数に0以上の整数を指定してください。" }, 422);
+    }
+
+    const dayRequirements = {
+      weekday: conditions?.weekday_day_staff_count ?? 0,
+      saturday: conditions?.saturday_day_staff_count ?? 0,
+      sunday: conditions?.sunday_day_staff_count ?? 0,
+    };
+    const maxConsecutiveWorkDays = conditions?.max_consecutive_work_days ?? 5;
+    if (!Object.values(dayRequirements).every((value) => Number.isInteger(value) && value >= 0)) {
+      return reply({ error: "日勤必要人数に0以上の整数を指定してください。" }, 422);
+    }
+    const needsDayStaff = Object.values(dayRequirements).some((count) => count > 0);
+    if (needsDayStaff && (!Number.isInteger(maxConsecutiveWorkDays) || maxConsecutiveWorkDays < 1)) {
+      return reply({ error: "連続勤務上限に1以上の整数を指定してください。" }, 422);
     }
 
     async function readAssignments(startDate: string, endDate: string) {
@@ -68,7 +85,7 @@ export async function POST(request: Request) {
 
       return readPages((from, to) => supabase
         .from("shift_assignments")
-        .select("staff_id, work_date, shift_code", { count: "exact" })
+        .select("staff_id, work_date, shift_code, work_amount", { count: "exact" })
         .eq("shift_sheet_id", sheet.id)
         .gte("work_date", startDate)
         .lte("work_date", endDate)
@@ -77,32 +94,63 @@ export async function POST(request: Request) {
         .abortSignal(request.signal));
     }
 
-    const previousDate = nightShiftNextDayAfter ? offsetShiftDate(firstDate, -1) : undefined;
+    async function readAdjacentAssignments(boundary: string, direction: -1 | 1) {
+      const daysForDayShifts = needsDayStaff ? maxConsecutiveWorkDays : 0;
+      let remaining = Math.max(daysForDayShifts, Number(nightShiftNextDayAfter));
+      let edge = offsetShiftDate(boundary, direction);
+      const assignments: Awaited<ReturnType<typeof readAssignments>> = [];
+
+      while (edge && remaining > 0) {
+        const month = edge.slice(0, 7);
+        const daysInRange = direction === -1 ? Number(edge.slice(-2)) : monthDates(month).length;
+        const days = Math.min(remaining, daysInRange);
+        const farDay = direction === -1 ? daysInRange - days + 1 : days;
+        const farDate = month + "-" + String(farDay).padStart(2, "0");
+        const startDate = direction === -1 ? farDate : edge;
+        const endDate = direction === -1 ? edge : farDate;
+        const rows = await readAssignments(startDate, endDate);
+        if (rows.length === 0) break;
+        assignments.push(...rows);
+        remaining -= days;
+        edge = offsetShiftDate(farDate, direction);
+      }
+
+      return assignments;
+    }
+
     const nextDate = nightShiftNextDayAfter ? offsetShiftDate(lastDate, 1) : undefined;
     const [leaveRequests, staffs, currentAssignments, previousAssignments, nextAssignments] = await Promise.all([
       readMonthlyLeaveRequests(supabase, firstDate, nextDate ?? lastDate, request.signal),
-      nightStaffCount > 0 ? readPages((from, to) => supabase
+      nightStaffCount > 0 || needsDayStaff ? readPages((from, to) => supabase
         .from("staffs")
-        .select("id, employment_status, is_active, can_night_shift, display_order", { count: "exact" })
+        .select("id, employment_status, is_active, can_night_shift, job_type, display_order", { count: "exact" })
         .eq("employment_status", "在籍中")
         .eq("is_active", true)
-        .eq("can_night_shift", true)
         .order("id")
         .range(from, to)
         .abortSignal(request.signal)) : [],
-      nightShiftNextDayAfter || nightStaffCount > 0 ? readAssignments(firstDate, lastDate) : [],
-      previousDate ? readAssignments(previousDate, previousDate) : [],
-      nextDate ? readAssignments(nextDate, nextDate) : [],
+      nightShiftNextDayAfter || nightStaffCount > 0 || needsDayStaff ? readAssignments(firstDate, lastDate) : [],
+      readAdjacentAssignments(firstDate, -1),
+      readAdjacentAssignments(lastDate, 1),
     ]);
     const { fixedCells } = prepareFixedLeaves(nextDate ? [...dates, { date: nextDate }] : dates, leaveRequests);
+    const existingAssignments = [...previousAssignments, ...currentAssignments, ...nextAssignments];
     const { assignments, shortages, nightAfterFixedCells, nightAfterConflicts } = assignNightShifts({
       dates,
       staffs,
       fixedCells,
-      existingAssignments: [...previousAssignments, ...currentAssignments, ...nextAssignments],
+      existingAssignments,
       nightShiftLimit,
       nightStaffCount,
       nightShiftNextDayAfter,
+    });
+    const { assignments: dayAssignments, shortages: dayShortages } = assignDayShifts({
+      dates,
+      staffs,
+      existingAssignments,
+      fixedCells: [...fixedCells, ...assignments, ...nightAfterFixedCells],
+      requirements: dayRequirements,
+      maxConsecutiveWorkDays,
     });
     return reply({
       fixedCells: fixedCells.filter(({ work_date }) => work_date !== nextDate),
@@ -110,6 +158,8 @@ export async function POST(request: Request) {
       nightShortages: shortages,
       nightAfterFixedCells,
       nightAfterConflicts,
+      dayAssignments,
+      dayShortages,
     });
   } catch (error) {
     if (error instanceof AuthError) return reply({ error: error.message }, error.status);
