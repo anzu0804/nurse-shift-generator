@@ -7,6 +7,7 @@ type DayShiftStaff = {
   is_active: boolean;
   job_type: string;
   display_order: number | null;
+  team?: string | null;
 };
 
 type ShiftCell = {
@@ -14,6 +15,7 @@ type ShiftCell = {
   work_date: string;
   shift_code: string;
   work_amount?: number;
+  team_assignment?: string | null;
 };
 
 type DayShiftRequirements = {
@@ -25,6 +27,13 @@ type DayShiftRequirements = {
 const DAY_SHIFT_CODE = "A";
 const dayShiftCodes = new Set([DAY_SHIFT_CODE, "A/S", "A/カ", "A/ケ", "A/コ", "A/管"]);
 const workShiftCodes = new Set([...dayShiftCodes, "D", "JA", "JO"]);
+const dayShiftTeams = ["A", "B"] as const;
+type DayShiftTeam = (typeof dayShiftTeams)[number];
+type TeamCounts = Record<DayShiftTeam, number>;
+
+function getDayShiftTeam(team: string | null | undefined): DayShiftTeam | undefined {
+  if (team === "A" || team === "B") return team;
+}
 
 function isWorkShift(cell: ShiftCell | undefined) {
   return cell !== undefined && (
@@ -76,6 +85,27 @@ export function getDayShiftCandidates(
   );
 }
 
+function selectDayShiftCandidates(
+  candidates: readonly DayShiftStaff[],
+  availableSlots: number,
+  teamNeeds: TeamCounts,
+) {
+  const remaining = { ...teamNeeds };
+  const selected: DayShiftStaff[] = [];
+  const otherCandidates: DayShiftStaff[] = [];
+  for (const staff of candidates) {
+    if (selected.length === availableSlots) break;
+    const team = getDayShiftTeam(staff.team);
+    if (team && remaining[team] > 0) {
+      selected.push(staff);
+      remaining[team] -= 1;
+    } else {
+      otherCandidates.push(staff);
+    }
+  }
+  return [...selected, ...otherCandidates.slice(0, availableSlots - selected.length)];
+}
+
 export function assignDayShifts({
   dates,
   staffs,
@@ -108,35 +138,52 @@ export function assignDayShifts({
 
   const assignments: ShiftCell[] = [];
   const shortages: { work_date: string; missing_count: number }[] = [];
+  const teamShortages: { work_date: string; team: DayShiftTeam; missing_count: number }[] = [];
 
   for (const { date, weekday } of [...dates].sort((a, b) => a.date.localeCompare(b.date))) {
     const required = requiredDayShiftCount(weekday, requirements);
     if (required === 0) continue;
 
-    const existingDayStaff = eligibleStaff.filter(({ id }) =>
-      dayShiftCodes.has(cells.get(staffDateKey(id, date))?.shift_code ?? ""),
-    ).length;
-    const needed = required - existingDayStaff;
-    if (needed <= 0) continue;
+    const teamCounts: TeamCounts = { A: 0, B: 0 };
+    let existingDayStaff = 0;
+    for (const staff of eligibleStaff) {
+      const cell = cells.get(staffDateKey(staff.id, date));
+      if (!cell || !dayShiftCodes.has(cell.shift_code)) continue;
+      existingDayStaff += 1;
+      const team = getDayShiftTeam(cell.team_assignment) ?? getDayShiftTeam(staff.team);
+      if (team) teamCounts[team] += 1;
+    }
 
-    const candidates = getDayShiftCandidates(eligibleStaff, date, cells, maxConsecutiveWorkDays)
+    // The saved count is shared by both teams. An odd slot is open to either team.
+    const minimumPerTeam = Math.floor(required / 2);
+    const needed = Math.max(0, required - existingDayStaff);
+    const candidates = needed === 0 ? [] : getDayShiftCandidates(eligibleStaff, date, cells, maxConsecutiveWorkDays)
       .sort((a, b) =>
         (workCounts.get(a.id) ?? 0) - (workCounts.get(b.id) ?? 0) ||
         (a.display_order ?? 0) - (b.display_order ?? 0) ||
         a.id - b.id,
       );
-    const selected = candidates.slice(0, needed);
-    for (const { id } of selected) {
+    const selected = selectDayShiftCandidates(candidates, needed, {
+      A: minimumPerTeam - teamCounts.A,
+      B: minimumPerTeam - teamCounts.B,
+    });
+    for (const { id, team } of selected) {
       const assignment = { staff_id: id, work_date: date, shift_code: DAY_SHIFT_CODE };
       cells.set(staffDateKey(id, date), assignment);
       assignments.push(assignment);
       workCounts.set(id, (workCounts.get(id) ?? 0) + 1);
+      const assignedTeam = getDayShiftTeam(team);
+      if (assignedTeam) teamCounts[assignedTeam] += 1;
     }
 
     if (selected.length < needed) {
       shortages.push({ work_date: date, missing_count: needed - selected.length });
     }
+    for (const team of dayShiftTeams) {
+      const missing = minimumPerTeam - teamCounts[team];
+      if (missing > 0) teamShortages.push({ work_date: date, team, missing_count: missing });
+    }
   }
 
-  return { assignments, shortages };
+  return { assignments, shortages, teamShortages };
 }

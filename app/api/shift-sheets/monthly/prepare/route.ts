@@ -15,6 +15,7 @@ type PreparedShift = {
   nightAfterConflicts: ReturnType<typeof assignNightShifts>["nightAfterConflicts"];
   dayAssignments: ReturnType<typeof assignDayShifts>["assignments"];
   dayShortages: ReturnType<typeof assignDayShifts>["shortages"];
+  dayTeamShortages: ReturnType<typeof assignDayShifts>["teamShortages"];
 };
 
 function reply(body: PreparedShift | { error: string }, status = 200) {
@@ -85,7 +86,7 @@ export async function POST(request: Request) {
 
       return readPages((from, to) => supabase
         .from("shift_assignments")
-        .select("staff_id, work_date, shift_code, work_amount", { count: "exact" })
+        .select("staff_id, work_date, shift_code, work_amount, team_assignment", { count: "exact" })
         .eq("shift_sheet_id", sheet.id)
         .gte("work_date", startDate)
         .lte("work_date", endDate)
@@ -123,7 +124,7 @@ export async function POST(request: Request) {
       readMonthlyLeaveRequests(supabase, firstDate, nextDate ?? lastDate, request.signal),
       nightStaffCount > 0 || needsDayStaff ? readPages((from, to) => supabase
         .from("staffs")
-        .select("id, employment_status, is_active, can_night_shift, job_type, display_order", { count: "exact" })
+        .select("id, employment_status, is_active, can_night_shift, job_type, display_order, team", { count: "exact" })
         .eq("employment_status", "在籍中")
         .eq("is_active", true)
         .order("id")
@@ -144,7 +145,7 @@ export async function POST(request: Request) {
       nightStaffCount,
       nightShiftNextDayAfter,
     });
-    const { assignments: dayAssignments, shortages: dayShortages } = assignDayShifts({
+    const { assignments: dayAssignments, shortages: dayShortages, teamShortages: dayTeamShortages } = assignDayShifts({
       dates,
       staffs,
       existingAssignments,
@@ -160,6 +161,7 @@ export async function POST(request: Request) {
       nightAfterConflicts,
       dayAssignments,
       dayShortages,
+      dayTeamShortages,
     });
   } catch (error) {
     if (error instanceof AuthError) return reply({ error: error.message }, error.status);

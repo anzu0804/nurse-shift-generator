@@ -119,3 +119,56 @@ test("prefers fewer workdays and uses display order for tied candidates", () => 
   });
   assert.deepEqual(result.assignments, [cell(3, sunday, "A")]);
 });
+
+test("prioritizes both teams before filling the shared odd slot", () => {
+  const result = prepare({
+    staffs: [staff(1, { team: "A" }), staff(2, { team: "A" }), staff(3, { team: "A" }), staff(4, { team: "B" })],
+  });
+  assert.deepEqual(result.assignments, [cell(1, sunday, "A"), cell(4, sunday, "A"), cell(2, sunday, "A")]);
+  assert.deepEqual(result.teamShortages, []);
+});
+
+test("counts existing day work by actual team and falls back to staff membership", () => {
+  const result = prepare({
+    staffs: [staff(1, { team: "A" }), staff(2, { team: "A" }), staff(3, { team: "B" })],
+    existingAssignments: [{ ...cell(1, sunday, "A/カ"), team_assignment: "B" }],
+    requirements: { weekday: 0, saturday: 0, sunday: 2 },
+  });
+  assert.deepEqual(result.assignments, [cell(2, sunday, "A")]);
+  assert.deepEqual(result.teamShortages, []);
+});
+
+test("keeps fixed cells and reports a team shortage even when the total is met", () => {
+  const result = prepare({
+    staffs: [
+      staff(1, { team: "A" }), staff(2, { team: "A" }), staff(3),
+      staff(4, { team: "B" }), staff(5, { team: "B" }), staff(6, { team: "B" }), staff(7, { team: "B" }),
+    ],
+    existingAssignments: [cell(1, sunday, "A/S"), cell(7, "2026-10-31", "D")],
+    fixedCells: [cell(4, sunday, "有"), cell(5, sunday, "D"), cell(6, sunday, "明")],
+    maxConsecutiveWorkDays: 1,
+  });
+  assert.deepEqual(result.assignments, [cell(2, sunday, "A"), cell(3, sunday, "A")]);
+  assert.deepEqual(result.shortages, []);
+  assert.deepEqual(result.teamShortages, [{ work_date: sunday, team: "B", missing_count: 1 }]);
+});
+
+test("reports team shortages when fixed day shifts already exhaust all slots", () => {
+  const result = prepare({
+    staffs: [staff(1, { team: "A" }), staff(2, { team: "A" }), staff(3, { team: "B" })],
+    existingAssignments: [cell(1, sunday, "A"), cell(2, sunday, "A/コ")],
+    requirements: { weekday: 0, saturday: 0, sunday: 2 },
+  });
+  assert.deepEqual(result.assignments, []);
+  assert.deepEqual(result.shortages, []);
+  assert.deepEqual(result.teamShortages, [{ work_date: sunday, team: "B", missing_count: 1 }]);
+});
+
+test("leaves a single slot open to either team and reports only an overall shortage", () => {
+  const result = prepare({
+    staffs: [],
+    requirements: { weekday: 0, saturday: 0, sunday: 1 },
+  });
+  assert.deepEqual(result.shortages, [{ work_date: sunday, missing_count: 1 }]);
+  assert.deepEqual(result.teamShortages, []);
+});
