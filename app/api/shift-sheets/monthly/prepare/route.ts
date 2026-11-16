@@ -3,12 +3,15 @@ import { AuthError, getAuthenticatedSupabase } from "@/lib/authenticated-supabas
 import { FixedLeaveValidationError, prepareFixedLeaves } from "@/lib/fixed-leave";
 import { readMonthlyLeaveRequests, readPages } from "@/lib/monthly-leave-requests";
 import { isMonthlyShiftMonth, monthDates } from "@/lib/monthly-shift";
+import { offsetShiftDate } from "@/lib/night-after";
 import { assignNightShifts } from "@/lib/night-shift";
 
 type PreparedShift = {
   fixedCells: ReturnType<typeof prepareFixedLeaves>["fixedCells"];
   nightAssignments: ReturnType<typeof assignNightShifts>["assignments"];
   nightShortages: ReturnType<typeof assignNightShifts>["shortages"];
+  nightAfterFixedCells: ReturnType<typeof assignNightShifts>["nightAfterFixedCells"];
+  nightAfterConflicts: ReturnType<typeof assignNightShifts>["nightAfterConflicts"];
 };
 
 function reply(body: PreparedShift | { error: string }, status = 200) {
@@ -30,14 +33,9 @@ export async function POST(request: Request) {
     const firstDate = month + "-01";
     const lastDate = dates[dates.length - 1].date;
     const [year, monthNumber] = month.split("-").map(Number);
-    const { fixedCells } = prepareFixedLeaves(
-      dates,
-      await readMonthlyLeaveRequests(supabase, firstDate, lastDate, request.signal),
-    );
-
     const { data: conditions, error: conditionsError } = await supabase
       .from("shift_conditions")
-      .select("default_night_shift_limit, night_staff_count")
+      .select("default_night_shift_limit, night_staff_count, night_shift_next_day_after")
       .eq("target_year", year)
       .eq("target_month", monthNumber)
       .abortSignal(request.signal)
@@ -47,15 +45,43 @@ export async function POST(request: Request) {
     // Match the conditions screen defaults for a month with no saved settings.
     const nightShiftLimit = conditions?.default_night_shift_limit ?? 4;
     const nightStaffCount = conditions?.night_staff_count ?? 0;
+    const nightShiftNextDayAfter = conditions?.night_shift_next_day_after ?? true;
     if (![nightShiftLimit, nightStaffCount].every((value) => Number.isInteger(value) && value >= 0)) {
       return reply({ error: "夜勤上限と夜勤必要人数に0以上の整数を指定してください。" }, 422);
     }
-    if (nightStaffCount === 0) {
-      return reply({ fixedCells, nightAssignments: [], nightShortages: [] });
+
+    async function readAssignments(startDate: string, endDate: string) {
+      const [sheetYear, sheetMonth] = startDate.split("-").map(Number);
+      const { data: sheet, error } = await supabase
+        .from("shift_sheets")
+        .select("id")
+        .eq("sheet_type", "monthly_schedule")
+        .eq("target_year", sheetYear)
+        .eq("target_month", sheetMonth)
+        .is("week_number", null)
+        .order("version", { ascending: false })
+        .limit(1)
+        .abortSignal(request.signal)
+        .maybeSingle();
+      if (error) throw error;
+      if (!sheet) return [];
+
+      return readPages((from, to) => supabase
+        .from("shift_assignments")
+        .select("staff_id, work_date, shift_code", { count: "exact" })
+        .eq("shift_sheet_id", sheet.id)
+        .gte("work_date", startDate)
+        .lte("work_date", endDate)
+        .order("id")
+        .range(from, to)
+        .abortSignal(request.signal));
     }
 
-    const [staffs, { data: sheet, error: sheetError }] = await Promise.all([
-      readPages((from, to) => supabase
+    const previousDate = nightShiftNextDayAfter ? offsetShiftDate(firstDate, -1) : undefined;
+    const nextDate = nightShiftNextDayAfter ? offsetShiftDate(lastDate, 1) : undefined;
+    const [leaveRequests, staffs, currentAssignments, previousAssignments, nextAssignments] = await Promise.all([
+      readMonthlyLeaveRequests(supabase, firstDate, nextDate ?? lastDate, request.signal),
+      nightStaffCount > 0 ? readPages((from, to) => supabase
         .from("staffs")
         .select("id, employment_status, is_active, can_night_shift, display_order", { count: "exact" })
         .eq("employment_status", "在籍中")
@@ -63,40 +89,28 @@ export async function POST(request: Request) {
         .eq("can_night_shift", true)
         .order("id")
         .range(from, to)
-        .abortSignal(request.signal)),
-      supabase
-        .from("shift_sheets")
-        .select("id")
-        .eq("sheet_type", "monthly_schedule")
-        .eq("target_year", year)
-        .eq("target_month", monthNumber)
-        .is("week_number", null)
-        .order("version", { ascending: false })
-        .limit(1)
-        .abortSignal(request.signal)
-        .maybeSingle(),
+        .abortSignal(request.signal)) : [],
+      nightShiftNextDayAfter || nightStaffCount > 0 ? readAssignments(firstDate, lastDate) : [],
+      previousDate ? readAssignments(previousDate, previousDate) : [],
+      nextDate ? readAssignments(nextDate, nextDate) : [],
     ]);
-    if (sheetError) throw sheetError;
-
-    const existingAssignments = sheet ? await readPages((from, to) => supabase
-      .from("shift_assignments")
-      .select("staff_id, work_date, shift_code", { count: "exact" })
-      .eq("shift_sheet_id", sheet.id)
-      .gte("work_date", firstDate)
-      .lte("work_date", lastDate)
-      .order("id")
-      .range(from, to)
-      .abortSignal(request.signal)) : [];
-
-    const { assignments, shortages } = assignNightShifts({
+    const { fixedCells } = prepareFixedLeaves(nextDate ? [...dates, { date: nextDate }] : dates, leaveRequests);
+    const { assignments, shortages, nightAfterFixedCells, nightAfterConflicts } = assignNightShifts({
       dates,
       staffs,
       fixedCells,
-      existingAssignments,
+      existingAssignments: [...previousAssignments, ...currentAssignments, ...nextAssignments],
       nightShiftLimit,
       nightStaffCount,
+      nightShiftNextDayAfter,
     });
-    return reply({ fixedCells, nightAssignments: assignments, nightShortages: shortages });
+    return reply({
+      fixedCells: fixedCells.filter(({ work_date }) => work_date !== nextDate),
+      nightAssignments: assignments,
+      nightShortages: shortages,
+      nightAfterFixedCells,
+      nightAfterConflicts,
+    });
   } catch (error) {
     if (error instanceof AuthError) return reply({ error: error.message }, error.status);
     if (error instanceof FixedLeaveValidationError) return reply({ error: error.message }, 422);

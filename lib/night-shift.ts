@@ -1,5 +1,7 @@
 import { staffDateKey } from "./fixed-leave.ts";
 
+import { checkNightAfter, NIGHT_AFTER_CODE, offsetShiftDate } from "./night-after.ts";
+
 export const NIGHT_SHIFT_CODE = "D";
 
 export type NightShiftStaff = {
@@ -43,6 +45,7 @@ export function assignNightShifts({
   existingAssignments,
   nightShiftLimit,
   nightStaffCount,
+  nightShiftNextDayAfter = false,
 }: {
   dates: readonly { date: string }[];
   staffs: readonly NightShiftStaff[];
@@ -50,24 +53,54 @@ export function assignNightShifts({
   existingAssignments: readonly ShiftCell[];
   nightShiftLimit: number;
   nightStaffCount: number;
+  nightShiftNextDayAfter?: boolean;
 }) {
-  const month = new Set(dates.map(({ date }) => date));
-  const occupied = new Set(fixedCells.map(({ staff_id, work_date }) => staffDateKey(staff_id, work_date)));
+  const month = new Set(dates.map(({ date }) => date).sort());
+  const firstDate = month.values().next().value;
+  const previousDate = firstDate && offsetShiftDate(firstDate, -1);
+  const shiftCodes = new Map<string, string>();
+  const existingNights = new Map<string, ShiftCell>();
   const nightCounts = new Map<number, number>();
   const assignedByDate = new Map<string, number>();
-  const existingKeys = new Set<string>();
 
-  for (const { staff_id, work_date, shift_code } of existingAssignments) {
-    if (!month.has(work_date)) continue;
+  for (const assignment of existingAssignments) {
+    const { staff_id, work_date, shift_code } = assignment;
     const key = staffDateKey(staff_id, work_date);
-    if (existingKeys.has(key)) continue;
-    existingKeys.add(key);
-    const conflictsWithFixedCell = occupied.has(key);
-    occupied.add(key);
-    if (shift_code !== NIGHT_SHIFT_CODE) continue;
-    nightCounts.set(staff_id, (nightCounts.get(staff_id) ?? 0) + 1);
-    if (!conflictsWithFixedCell) {
-      assignedByDate.set(work_date, (assignedByDate.get(work_date) ?? 0) + 1);
+    // Preserve a conflict even when an existing 明 also appears for the same cell.
+    const currentCode = shiftCodes.get(key);
+    if (currentCode === undefined || currentCode === NIGHT_AFTER_CODE) {
+      shiftCodes.set(key, shift_code);
+    }
+    if (shift_code === NIGHT_SHIFT_CODE) existingNights.set(key, assignment);
+  }
+  const fixedKeys = new Set<string>();
+  for (const { staff_id, work_date, shift_code } of fixedCells) {
+    const key = staffDateKey(staff_id, work_date);
+    fixedKeys.add(key);
+    shiftCodes.set(key, shift_code);
+  }
+
+  const occupied = new Set(shiftCodes.keys());
+  const nightAfterFixedCells: ShiftCell[] = [];
+  const nightAfterConflicts: Extract<ReturnType<typeof checkNightAfter>, { kind: "conflict" }>["issue"][] = [];
+
+  function fixNightAfter(result: ReturnType<typeof checkNightAfter>) {
+    if (result.kind === "conflict") nightAfterConflicts.push(result.issue);
+    if (result.kind !== "available") return;
+    occupied.add(result.key);
+    shiftCodes.set(result.key, NIGHT_AFTER_CODE);
+    nightAfterFixedCells.push(result.cell);
+  }
+
+  for (const [key, { staff_id, work_date }] of existingNights) {
+    if (month.has(work_date)) {
+      nightCounts.set(staff_id, (nightCounts.get(staff_id) ?? 0) + 1);
+      if (!fixedKeys.has(key) && shiftCodes.get(key) === NIGHT_SHIFT_CODE) {
+        assignedByDate.set(work_date, (assignedByDate.get(work_date) ?? 0) + 1);
+      }
+    }
+    if (nightShiftNextDayAfter && (month.has(work_date) || work_date === previousDate)) {
+      fixNightAfter(checkNightAfter(staff_id, work_date, shiftCodes));
     }
   }
 
@@ -82,7 +115,12 @@ export function assignNightShifts({
       const key = staffDateKey(id, date);
       if (occupied.has(key)) continue;
 
+      const nightAfter = nightShiftNextDayAfter ? checkNightAfter(id, date, shiftCodes) : undefined;
+      if (nightAfter?.kind === "conflict" || nightAfter?.kind === "outside-calendar") continue;
+
       occupied.add(key);
+      shiftCodes.set(key, NIGHT_SHIFT_CODE);
+      if (nightAfter) fixNightAfter(nightAfter);
       nightCounts.set(id, (nightCounts.get(id) ?? 0) + 1);
       assignments.push({ staff_id: id, work_date: date, shift_code: NIGHT_SHIFT_CODE });
       missingCount -= 1;
@@ -92,5 +130,5 @@ export function assignNightShifts({
     if (missingCount > 0) shortages.push({ work_date: date, missing_count: missingCount });
   }
 
-  return { assignments, shortages };
+  return { assignments, shortages, nightAfterFixedCells, nightAfterConflicts };
 }
