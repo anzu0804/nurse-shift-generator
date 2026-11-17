@@ -1,7 +1,11 @@
-export type MonthlyAssignment = {
+import type { EditableShift } from "./manual-shift.ts";
+import type { ShiftValidationResult } from "./shift-validation.ts";
+
+export type MonthlyAssignment = EditableShift & {
+  id: number;
+  is_manual_edit: boolean;
   staff_id: number;
   work_date: string;
-  shift_code: string;
   staff: {
     name: string;
     employee_no: string;
@@ -13,6 +17,7 @@ export type MonthlyAssignment = {
 export type MonthlyShift = {
   sheet: { id: number; status: string; version: number } | null;
   assignments: MonthlyAssignment[];
+  validationResults: ShiftValidationResult[];
 };
 
 export function isMonthlyShiftMonth(month: string) {
