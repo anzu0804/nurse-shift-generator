@@ -13,6 +13,7 @@ const menus = [
   { href: "/meetings", label: "会議・予定管理" },
   { href: "/conditions", label: "条件管理" },
   { href: "/shift-create", label: "シフト作成" },
+  { href: "/shift-reports", label: "シフト帳票" },
   { href: "/shift-edit", label: "シフト編集" },
   { href: "/export", label: "出力" },
   { href: "/public-holidays", label: "公休確認" },
