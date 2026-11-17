@@ -24,6 +24,7 @@ type PreparedShift = {
     ReturnType<typeof getWeekendImbalance>[number]
   )[];
   dayTeamShortages: ReturnType<typeof assignDayShifts>["teamShortages"];
+  dayLeadershipShortages: ReturnType<typeof assignDayShifts>["leadershipShortages"];
 };
 
 function reply(
@@ -83,7 +84,6 @@ export async function POST(request: Request) {
     if (!Object.values(dayRequirements).every((value) => Number.isInteger(value) && value >= 0)) {
       return errorReply(shiftValidationError("INVALID_CONDITIONS", "日勤必要人数に0以上の整数を指定してください。"), 422);
     }
-    const needsDayStaff = Object.values(dayRequirements).some((count) => count > 0);
     if (!Number.isInteger(maxConsecutiveWorkDays) || maxConsecutiveWorkDays < 1) {
       return errorReply(shiftValidationError("INVALID_CONDITIONS", "連続勤務上限に1以上の整数を指定してください。"), 422);
     }
@@ -141,14 +141,14 @@ export async function POST(request: Request) {
     const nextDate = nightShiftNextDayAfter ? offsetShiftDate(lastDate, 1) : undefined;
     const [leaveRequests, staffs, currentAssignments, previousAssignments, nextAssignments, ngPairs] = await Promise.all([
       readMonthlyLeaveRequests(supabase, firstDate, nextDate ?? lastDate, request.signal),
-      nightStaffCount > 0 || needsDayStaff || balanceWeekendShifts ? readPages((from, to) => supabase
+      readPages((from, to) => supabase
         .from("staffs")
-        .select("id, employment_status, is_active, can_night_shift, job_type, display_order, team", { count: "exact" })
+        .select("id, employment_status, is_active, can_night_shift, job_type, display_order, team, role", { count: "exact" })
         .eq("employment_status", "在籍中")
         .eq("is_active", true)
         .order("id")
         .range(from, to)
-        .abortSignal(request.signal)) : [],
+        .abortSignal(request.signal)),
       readAssignments(firstDate, lastDate),
       readAdjacentAssignments(firstDate, -1),
       readAdjacentAssignments(lastDate, 1),
@@ -175,7 +175,12 @@ export async function POST(request: Request) {
       ngPairPartners,
     });
     const lockedCells = [...fixedCells, ...assignments, ...nightAfterFixedCells];
-    const { assignments: dayAssignments, shortages: dayShortages, teamShortages: dayTeamShortages } = assignDayShifts({
+    const {
+      assignments: dayAssignments,
+      shortages: dayShortages,
+      teamShortages: dayTeamShortages,
+      leadershipShortages: dayLeadershipShortages,
+    } = assignDayShifts({
       dates,
       staffs,
       existingAssignments,
@@ -201,6 +206,7 @@ export async function POST(request: Request) {
       dayAssignments,
       dayShortages,
       dayTeamShortages,
+      dayLeadershipShortages,
       warnings: [...nightLimitWarnings, ...consecutiveWorkWarnings, ...weekendWarnings],
     };
     const ngPairViolations = getNgPairViolations(currentAssignments, ngPairPartners);

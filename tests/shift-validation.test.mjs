@@ -46,6 +46,18 @@ test("指摘がない場合は空配列を返す", () => {
   assert.deepEqual(monthlyGenerationChecks(emptyChecks), []);
 });
 
+test("主任・リーダーの不足をE006としてチームと日付ごとに返す", () => {
+  assert.deepEqual(monthlyGenerationChecks({
+    ...emptyChecks,
+    dayLeadershipShortages: [{ work_date: "2026-12-03", team: "B", missing_count: 1 }],
+  }), [{
+    severity: "error",
+    validation_code: "E006",
+    work_date: "2026-12-03",
+    message: "Bチームの日勤に主任またはリーダーが1人不足しています。",
+  }]);
+});
+
 test("希望休の入力エラーを種類とスタッフ・日付で特定できる", () => {
   const date = "2026-12-03";
   const leave = { staff_id: 4, leave_date: date, leave_type: "有給", status: "確定" };

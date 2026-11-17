@@ -54,6 +54,7 @@ function repairLinksFor(code: string): (keyof typeof repairLinks)[] {
   if (code.startsWith("LEAVE_")) return ["leaves"];
   switch (code) {
     case "E004": return ["conditions", "staffs", "leaves"];
+    case "E006": return ["staffs", "leaves", "schedule"];
     case "E007": return ["schedule", "leaves"];
     case "W001":
     case "W002":

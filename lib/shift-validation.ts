@@ -17,6 +17,7 @@ type GenerationChecks = {
   nightAfterConflicts: ReturnType<typeof assignNightShifts>["nightAfterConflicts"];
   dayShortages: ReturnType<typeof assignDayShifts>["shortages"];
   dayTeamShortages: ReturnType<typeof assignDayShifts>["teamShortages"];
+  dayLeadershipShortages?: ReturnType<typeof assignDayShifts>["leadershipShortages"];
   ngPairViolations?: readonly NgPairViolation[];
   warnings: (
     ReturnType<typeof assignNightShifts>["nightLimitWarnings"][number] |
@@ -43,6 +44,9 @@ export function monthlyGenerationChecks(checks: GenerationChecks): ShiftValidati
   return [
     ...shortages.map(({ work_date, missing_count, shift }) =>
       shiftValidationError("E004", `${shift}の必要人数に${missing_count}人不足しています。`, { work_date }),
+    ),
+    ...(checks.dayLeadershipShortages ?? []).map(({ work_date, team, missing_count }) =>
+      shiftValidationError("E006", `${team}チームの日勤に主任またはリーダーが${missing_count}人不足しています。`, { work_date }),
     ),
     ...checks.nightAfterConflicts.map(({ code, staff_id, work_date, night_date, conflicting_shift_code }) =>
       shiftValidationError(code,

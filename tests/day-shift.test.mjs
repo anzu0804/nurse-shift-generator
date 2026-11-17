@@ -3,6 +3,8 @@ import test from "node:test";
 import { assignDayShifts, getConsecutiveWorkWarnings, getDayShiftCandidates, requiredDayShiftCount } from "../lib/day-shift.ts";
 import { staffDateKey } from "../lib/fixed-leave.ts";
 import { monthDates } from "../lib/monthly-shift.ts";
+import { getNgPairViolations, indexNgPairs } from "../lib/ng-pairs.ts";
+import { assignNightShifts } from "../lib/night-shift.ts";
 
 const dates = monthDates("2026-11");
 const [sunday, monday, tuesday] = dates.map(({ date }) => date);
@@ -197,4 +199,112 @@ test("reports over-limit work across the month boundary and applies fixed leave 
   assert.deepEqual(getConsecutiveWorkWarnings(dates, [saved, [cell(2, sunday, "有")]], 2), [
     { code: "W002", staff_id: 1, work_date: sunday, count: 3, limit: 2 },
   ]);
+});
+
+test("fills the last day slots with chiefs and leaders before general staff", () => {
+  const result = prepare({
+    staffs: [
+      staff(1, { team: "A", role: "一般" }),
+      staff(2, { team: "A", role: "リーダー" }),
+      staff(3, { team: "A", role: "主任" }),
+      staff(4, { team: "B", role: "リーダー" }),
+    ],
+    requirements: { weekday: 2, saturday: 2, sunday: 2 },
+  });
+  assert.deepEqual(result.assignments, [cell(3, sunday, "A"), cell(4, sunday, "A")]);
+  assert.deepEqual(result.leadershipShortages, []);
+});
+
+test("counts fixed day leaders in their actual team and assigns cross-team cover to the other team", () => {
+  const result = prepare({
+    staffs: [staff(1, { team: "B", role: "主任" }), staff(2, { team: "B", role: "リーダー" })],
+    existingAssignments: [{ ...cell(1, sunday, "A/カ"), team_assignment: "A" }],
+    requirements: { weekday: 2, saturday: 2, sunday: 2 },
+  });
+  assert.deepEqual(result.assignments, [cell(2, sunday, "A")]);
+  assert.deepEqual(result.leadershipShortages, []);
+
+  const crossTeam = prepare({
+    staffs: [staff(1, { team: "A", role: "主任" }), staff(2, { team: "A", role: "リーダー" })],
+    existingAssignments: [cell(1, sunday, "A/カ")],
+    requirements: { weekday: 2, saturday: 2, sunday: 2 },
+  });
+  assert.deepEqual(crossTeam.assignments, [{ ...cell(2, sunday, "A"), team_assignment: "B" }]);
+  assert.deepEqual(crossTeam.leadershipShortages, []);
+});
+
+test("chooses a compatible pair when the highest ranked chief blocks the other team's only candidate", () => {
+  const result = prepare({
+    staffs: [
+      staff(1, { team: "A", role: "主任" }),
+      staff(2, { team: "A", role: "リーダー" }),
+      staff(3, { team: "B", role: "リーダー" }),
+    ],
+    requirements: { weekday: 2, saturday: 2, sunday: 2 },
+    ngPairPartners: indexNgPairs([{ staff_a_id: 3, staff_b_id: 1, is_active: true }]),
+  });
+  assert.deepEqual(result.assignments, [cell(2, sunday, "A"), cell(3, sunday, "A")]);
+  assert.deepEqual(result.leadershipShortages, []);
+});
+
+test("reports role shortages without replacing fixed work or bypassing leave, D, 明, NG pairs or the work limit", () => {
+  const result = prepare({
+    staffs: [
+      staff(1, { team: "A", role: "主任" }),
+      ...[2, 3, 4, 5, 6].map((id) => staff(id, { team: "B", role: "リーダー" })),
+      staff(7, { team: "B", role: "師長" }),
+    ],
+    existingAssignments: [cell(1, sunday, "A"), cell(5, "2026-10-31", "D")],
+    fixedCells: [cell(2, sunday, "有"), cell(3, sunday, "D"), cell(4, sunday, "明")],
+    maxConsecutiveWorkDays: 1,
+    requirements: { weekday: 2, saturday: 2, sunday: 2 },
+    ngPairPartners: indexNgPairs([{ staff_a_id: 1, staff_b_id: 6, is_active: true }]),
+  });
+  assert.deepEqual(result.assignments, [cell(7, sunday, "A")]);
+  assert.deepEqual(result.shortages, []);
+  assert.deepEqual(result.teamShortages, []);
+  assert.deepEqual(result.leadershipShortages, [{ work_date: sunday, team: "B", missing_count: 1 }]);
+});
+
+test("reports missing leaders when fixed assignments exhaust the day slots, including a zero-staff day", () => {
+  const result = prepare({
+    dates: dates.slice(0, 2),
+    staffs: [staff(1, { team: "A", role: "主任" }), staff(2, { team: "B", role: "リーダー" })],
+    existingAssignments: [cell(1, sunday, "A")],
+    requirements: { weekday: 0, saturday: 0, sunday: 1 },
+  });
+  assert.deepEqual(result.assignments, []);
+  assert.deepEqual(result.leadershipShortages, [
+    { work_date: sunday, team: "B", missing_count: 1 },
+    { work_date: monday, team: "A", missing_count: 1 },
+    { work_date: monday, team: "B", missing_count: 1 },
+  ]);
+});
+
+test("covers both teams for a 31-day month alongside night shifts and next-day recovery", () => {
+  const dates = monthDates("2026-12");
+  const staffs = ["A", "B"].flatMap((team, index) => Array.from({ length: 12 }, (_, offset) =>
+    staff(index * 12 + offset + 1, {
+      team, role: offset === 0 ? "主任" : offset < 4 ? "リーダー" : "一般", can_night_shift: true,
+    }),
+  ));
+  const fixedCells = [cell(1, dates[0].date, "有")];
+  const ngPairPartners = indexNgPairs([{ staff_a_id: 2, staff_b_id: 13, is_active: true }]);
+  const night = assignNightShifts({
+    dates, staffs, fixedCells, existingAssignments: [], ngPairPartners,
+    nightShiftLimit: 4, nightStaffCount: 2, nightShiftNextDayAfter: true,
+  });
+  const locked = [...fixedCells, ...night.assignments, ...night.nightAfterFixedCells];
+  const day = prepare({
+    dates, staffs, fixedCells: locked, ngPairPartners,
+    requirements: { weekday: 4, saturday: 4, sunday: 4 },
+  });
+  assert.equal(night.assignments.length, 62);
+  assert.equal(day.assignments.length, 124);
+  assert.deepEqual(day.teamShortages, []);
+  assert.deepEqual(day.leadershipShortages, []);
+  assert.deepEqual(getNgPairViolations([...night.assignments, ...day.assignments], ngPairPartners), []);
+  const occupied = new Set(locked.map((row) => staffDateKey(row.staff_id, row.work_date)));
+  assert.ok(day.assignments.every((row) => !occupied.has(staffDateKey(row.staff_id, row.work_date))));
+  assert.deepEqual(getConsecutiveWorkWarnings(dates, [locked, day.assignments], 5), []);
 });
