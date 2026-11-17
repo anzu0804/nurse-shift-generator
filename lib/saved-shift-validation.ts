@@ -87,10 +87,13 @@ export function validateSavedShift({
   const nightCounts = new Map<number, number>();
   const holidayCounts = new Map<number, number>();
 
+  const specialLeaveDays = new Set<string>();
   for (const leave of leaves) {
     if (!ACTIVE_LEAVE_STATUSES.some((status) => status === leave.status)) continue;
     const expected = leaveShiftCode(leave.leave_type);
-    if (!expected || cells.get(staffDateKey(leave.staff_id, leave.leave_date)) !== expected) {
+    const key = staffDateKey(leave.staff_id, leave.leave_date);
+    if (expected === "公") specialLeaveDays.add(key);
+    if (!expected || cells.get(key) !== expected) {
       issues.push(shiftValidationError("E001", `希望休（${leave.leave_type}）が反映されていません。`, {
         staff_id: leave.staff_id, work_date: leave.leave_date,
       }));
@@ -117,7 +120,8 @@ export function validateSavedShift({
       issues.push(shiftValidationError("MANAGER_SHIFT", "師長専用の勤務記号が使われています。", location));
     }
     const holidays = ["公", "前", "マ/コ"].includes(shift_code) ? 1 : ["A/コ", "コ/カ"].includes(shift_code) ? 0.5 : 0;
-    if (holidays) holidayCounts.set(staff_id, (holidayCounts.get(staff_id) ?? 0) + holidays);
+    const specialLeave = shift_code === "公" && specialLeaveDays.has(staffDateKey(staff_id, work_date));
+    if (holidays && !specialLeave) holidayCounts.set(staff_id, (holidayCounts.get(staff_id) ?? 0) + holidays);
     const amount = manualShiftAmounts.get(shift_code);
     if (typeof amount === "number" && amount !== work_amount) {
       issues.push({ ...shiftValidationError("WORK_AMOUNT", `「${shift_code}」の勤務実績は${amount}です。`, location), severity: "warning" });

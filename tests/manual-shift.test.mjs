@@ -72,5 +72,5 @@ test("revalidation checks previous-month night work, repeating bath days, and ex
   });
   assert.ok(results.some((issue) => issue.validation_code === "E007" && issue.staff_id === 1));
   assert.equal(results.filter((issue) => issue.validation_code === "E009").length, 2);
-  assert.ok(results.some((issue) => issue.validation_code === "W003" && issue.staff_id === 4));
+  assert.ok(results.some((issue) => issue.validation_code === "W003" && issue.staff_id === 4 && /割当は0日/.test(issue.message)));
 });
