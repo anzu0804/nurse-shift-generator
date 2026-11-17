@@ -1,9 +1,11 @@
 import { NextResponse } from "next/server";
 import { AuthError, getAuthenticatedSupabase } from "@/lib/authenticated-supabase";
+import { HolidayCalendarError } from "@/lib/japanese-holidays";
 import { manualShiftAmounts, parseManualEdit, positiveInteger } from "@/lib/manual-shift";
 import { readMonthlyLeaveRequests, readPages } from "@/lib/monthly-leave-requests";
 import { monthDates } from "@/lib/monthly-shift";
 import { offsetShiftDate } from "@/lib/night-after";
+import { HolidayVersionConflict, readPublicHolidays } from "@/lib/saved-public-holidays";
 import { readMonthlyAssignments, readMonthlySheet } from "@/lib/saved-monthly-shift";
 import { validateSavedShift } from "@/lib/saved-shift-validation";
 
@@ -73,10 +75,12 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ as
         .select("event_date, recurrence_type, recurrence_rule", { count: "exact" })
         .eq("event_type", "入浴日").lte("event_date", last)
         .order("id").range(from, to).abortSignal(signal)),
-      readPages((from, to) => client.from("public_holiday_balances")
-        .select("staff_id, available_holidays", { count: "exact" })
-        .eq("target_year", year).eq("target_month", monthNumber)
-        .order("id").range(from, to).abortSignal(signal)),
+      readPublicHolidays(client, month, signal).then(({ rows }) => rows.flatMap((row) =>
+        row.available_holidays === null ? [] : [{ staff_id: row.staff_id, available_holidays: row.available_holidays }],
+      )).catch((error: unknown) => {
+        if (error instanceof HolidayCalendarError) return [];
+        throw error;
+      }),
     ]);
     if (conditionsError) throw conditionsError;
     const cell = assignments.find((item) => item.id === id);
@@ -125,7 +129,7 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ as
     const code = typeof error === "object" && error && "code" in error ? error.code : undefined;
     if (code === "42501") return reply({ error: "シフト表を編集する権限がありません。" }, 403);
     if (code === "P0002") return reply({ error: "勤務割当が見つかりません。" }, 404);
-    if (code === "40001" || code === "23505") {
+    if (error instanceof HolidayVersionConflict || code === "40001" || code === "23505") {
       return reply({ error: "シフト表が更新されています。「表示」で読み込み直してください。" }, 409);
     }
     if (code === "22023" || code === "23514") return reply({ error: "勤務割当の編集内容を確認してください。" }, 400);
