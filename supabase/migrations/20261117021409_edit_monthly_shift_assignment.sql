@@ -104,5 +104,5 @@ BEGIN
 END;
 $$;
 
-REVOKE EXECUTE ON FUNCTION public.edit_monthly_shift_assignment(bigint, integer, jsonb, jsonb) FROM PUBLIC, anon;
+REVOKE EXECUTE ON FUNCTION public.edit_monthly_shift_assignment(bigint, integer, jsonb, jsonb) FROM PUBLIC, anon, service_role;
 GRANT EXECUTE ON FUNCTION public.edit_monthly_shift_assignment(bigint, integer, jsonb, jsonb) TO authenticated;
